@@ -2,18 +2,17 @@
 
 #include "aw/hardware.hpp"
 #include "aw/ppu.hpp"
-
 #include <string>
 
 namespace aw {
 
 enum class AspectRatio {
-  Original_3_2,  // 3:2 (GBA Native 240x160)
-  Ratio_4_3,     // 4:3 (Standard SD)
-  Ratio_16_9,    // 16:9 (HD Widescreen)
-  Ratio_21_9,    // 21:9 (Ultrawide)
-  Ratio_21_10,   // 21:10 (Cinematic Ultrawide)
-  Stretch        // Fill window without aspect lock
+  Original_3_2,  // 3:2 Window Mode (960x640)
+  Ratio_4_3,     // 4:3 Window Mode (960x720)
+  Ratio_16_9,    // 16:9 Window Mode (1152x648)
+  Ratio_21_9,    // 21:9 Window Mode (1260x540)
+  Ratio_21_10,   // 21:10 Window Mode (1134x540)
+  Stretch        // Fill Window without aspect lock
 };
 
 struct ViewportRect {
@@ -37,6 +36,8 @@ public:
 
   void set_aspect_ratio(AspectRatio ratio);
   AspectRatio aspect_ratio() const { return aspect_ratio_; }
+
+  void resize_client(int width, int height);
 
   // Returns true if the user selected a new ROM from the File -> Open ROM menu
   bool has_pending_rom() const { return !pending_rom_path_.empty(); }

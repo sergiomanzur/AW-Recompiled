@@ -14,7 +14,7 @@ int main() {
     assert(vp.height == 1080);
   }
 
-  // Test 2: Original 3:2 aspect ratio in 16:9 window (1920x1080)
+  // Test 2: Original 3:2 mode in 16:9 window (1920x1080)
   // Target aspect = 1.5. Client aspect = 1.7778 -> Pillarboxing (vp_height = 1080, vp_width = 1620, vp_x = 150)
   {
     auto vp = aw::calculate_viewport_rect(1920, 1080, aw::AspectRatio::Original_3_2);
@@ -24,44 +24,44 @@ int main() {
     assert(vp.x == 150);
   }
 
-  // Test 3: 4:3 aspect ratio in 16:9 window (1920x1080)
-  // Target aspect = 1.333333. Client aspect = 1.7778 -> Pillarboxing (vp_height = 1080, vp_width = 1440, vp_x = 240)
+  // Test 3: 4:3 Window Mode (960x720)
+  // 960x720 client rect -> 3:2 viewport is 960x640, vp_y = 40 (letterboxed top & bottom)
   {
-    auto vp = aw::calculate_viewport_rect(1920, 1080, aw::AspectRatio::Ratio_4_3);
+    auto vp = aw::calculate_viewport_rect(960, 720, aw::AspectRatio::Ratio_4_3);
+    assert(vp.x == 0);
+    assert(vp.width == 960);
+    assert(vp.height == 640);
+    assert(vp.y == 40);
+  }
+
+  // Test 4: 16:9 Window Mode (1152x648)
+  // 1152x648 client rect -> 3:2 viewport is 972x648, vp_x = 90 (pillarboxed left & right)
+  {
+    auto vp = aw::calculate_viewport_rect(1152, 648, aw::AspectRatio::Ratio_16_9);
     assert(vp.y == 0);
-    assert(vp.height == 1080);
-    assert(vp.width == 1440);
-    assert(vp.x == 240);
+    assert(vp.height == 648);
+    assert(vp.width == 972);
+    assert(vp.x == 90);
   }
 
-  // Test 4: 16:9 aspect ratio in 4:3 window (1024x768)
-  // Target aspect = 16/9 = 1.7778. Client aspect = 1.3333 -> Letterboxing (vp_width = 1024, vp_height = 576, vp_y = 96)
+  // Test 5: 21:9 Window Mode (1260x540)
+  // 1260x540 client rect -> 3:2 viewport is 810x540, vp_x = 225 (pillarboxed left & right)
   {
-    auto vp = aw::calculate_viewport_rect(1024, 768, aw::AspectRatio::Ratio_16_9);
-    assert(vp.x == 0);
-    assert(vp.width == 1024);
-    assert(vp.height == 576);
-    assert(vp.y == 96);
+    auto vp = aw::calculate_viewport_rect(1260, 540, aw::AspectRatio::Ratio_21_9);
+    assert(vp.y == 0);
+    assert(vp.height == 540);
+    assert(vp.width == 810);
+    assert(vp.x == 225);
   }
 
-  // Test 5: 21:9 aspect ratio in 16:9 window (1920x1080)
-  // Target aspect = 21/9 = 2.3333. Client aspect = 1.7778 -> Letterboxing
+  // Test 6: 21:10 Window Mode (1134x540)
+  // 1134x540 client rect -> 3:2 viewport is 810x540, vp_x = 162 (pillarboxed left & right)
   {
-    auto vp = aw::calculate_viewport_rect(1920, 1080, aw::AspectRatio::Ratio_21_9);
-    assert(vp.x == 0);
-    assert(vp.width == 1920);
-    assert(vp.height == static_cast<int>(1920.0 / (21.0 / 9.0) + 0.5));
-    assert(vp.y == (1080 - vp.height) / 2);
-  }
-
-  // Test 6: 21:10 aspect ratio in 16:9 window (1920x1080)
-  // Target aspect = 21/10 = 2.10. Client aspect = 1.7778 -> Letterboxing
-  {
-    auto vp = aw::calculate_viewport_rect(1920, 1080, aw::AspectRatio::Ratio_21_10);
-    assert(vp.x == 0);
-    assert(vp.width == 1920);
-    assert(vp.height == static_cast<int>(1920.0 / (21.0 / 10.0) + 0.5));
-    assert(vp.y == (1080 - vp.height) / 2);
+    auto vp = aw::calculate_viewport_rect(1134, 540, aw::AspectRatio::Ratio_21_10);
+    assert(vp.y == 0);
+    assert(vp.height == 540);
+    assert(vp.width == 810);
+    assert(vp.x == 162);
   }
 
   std::cout << "All window aspect ratio tests passed!\n";

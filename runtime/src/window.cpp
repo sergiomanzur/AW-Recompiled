@@ -22,27 +22,8 @@ ViewportRect calculate_viewport_rect(int client_width, int client_height, Aspect
     return {0, 0, client_width, client_height};
   }
 
-  double target_aspect = 1.5;  // Default 3:2
-  switch (ratio) {
-    case AspectRatio::Original_3_2:
-      target_aspect = 3.0 / 2.0;  // 1.50
-      break;
-    case AspectRatio::Ratio_4_3:
-      target_aspect = 4.0 / 3.0;  // 1.3333...
-      break;
-    case AspectRatio::Ratio_16_9:
-      target_aspect = 16.0 / 9.0; // 1.7777...
-      break;
-    case AspectRatio::Ratio_21_9:
-      target_aspect = 21.0 / 9.0; // 2.3333...
-      break;
-    case AspectRatio::Ratio_21_10:
-      target_aspect = 21.0 / 10.0; // 2.10
-      break;
-    case AspectRatio::Stretch:
-      return {0, 0, client_width, client_height};
-  }
-
+  // ALL non-stretch aspect ratio modes preserve GBA's native 3:2 (1.50) graphics
+  const double target_aspect = 3.0 / 2.0;
   const double client_aspect = static_cast<double>(client_width) / static_cast<double>(client_height);
 
   int vp_width = 0;
@@ -51,13 +32,13 @@ ViewportRect calculate_viewport_rect(int client_width, int client_height, Aspect
   int vp_y = 0;
 
   if (client_aspect > target_aspect) {
-    // Window is wider than target aspect ratio -> Pillarboxing (black bars on left & right)
+    // Window is wider than 3:2 -> Pillarboxing (black margins on left & right)
     vp_height = client_height;
     vp_width = static_cast<int>(client_height * target_aspect + 0.5);
     vp_x = (client_width - vp_width) / 2;
     vp_y = 0;
   } else {
-    // Window is taller than target aspect ratio -> Letterboxing (black bars on top & bottom)
+    // Window is taller than 3:2 -> Letterboxing (black margins on top & bottom)
     vp_width = client_width;
     vp_height = static_cast<int>(client_width / target_aspect + 0.5);
     vp_x = 0;
@@ -169,11 +150,11 @@ Window::Window(int width, int height, const char* title)
   AppendMenuA(hFileMenu, MF_SEPARATOR, 0, nullptr);
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_EXIT, "E&xit");
 
-  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_3_2, "&3:2 (GBA Native)");
-  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_4_3, "&4:3 (Classic TV)");
-  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_16_9, "1&6:9 (Widescreen)");
-  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_21_9, "&21:9 (Ultrawide)");
-  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_21_10, "21:10 (Cinematic)");
+  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_3_2, "&3:2 Window Mode (960x640)");
+  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_4_3, "&4:3 Window Mode (960x720)");
+  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_16_9, "1&6:9 Window Mode (1152x648)");
+  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_21_9, "&21:9 Window Mode (1260x540)");
+  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_21_10, "21:10 Window Mode (1134x540)");
   AppendMenuA(hAspectMenu, MF_SEPARATOR, 0, nullptr);
   AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_STRETCH, "&Stretch to Window");
 
@@ -231,9 +212,33 @@ std::string Window::consume_pending_rom() {
 void Window::set_aspect_ratio(AspectRatio ratio) {
   aspect_ratio_ = ratio;
   update_menu_checks();
+
+  // Resize window frame to match chosen aspect ratio while keeping 3:2 graphics undistorted inside
+  switch (ratio) {
+    case AspectRatio::Original_3_2:  resize_client(960, 640); break;
+    case AspectRatio::Ratio_4_3:     resize_client(960, 720); break;
+    case AspectRatio::Ratio_16_9:    resize_client(1152, 648); break;
+    case AspectRatio::Ratio_21_9:    resize_client(1260, 540); break;
+    case AspectRatio::Ratio_21_10:   resize_client(1134, 540); break;
+    case AspectRatio::Stretch:      break;
+  }
+
   if (hwnd_ != nullptr) {
     InvalidateRect(static_cast<HWND>(hwnd_), nullptr, TRUE);
   }
+}
+
+void Window::resize_client(int width, int height) {
+  if (hwnd_ == nullptr) return;
+  HWND hwnd = static_cast<HWND>(hwnd_);
+
+  RECT rect = {0, 0, width, height};
+  DWORD style = static_cast<DWORD>(GetWindowLongA(hwnd, GWL_STYLE));
+  BOOL has_menu = GetMenu(hwnd) != nullptr ? TRUE : FALSE;
+  AdjustWindowRect(&rect, style, has_menu);
+
+  SetWindowPos(hwnd, nullptr, 0, 0, rect.right - rect.left, rect.bottom - rect.top,
+               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 void Window::update_menu_checks() {
@@ -332,7 +337,7 @@ void Window::render(const Ppu& ppu) {
 
   const ViewportRect vp = cached_viewport_;
 
-  // If pillarboxing or letterboxing is active, ensure padding margins stay black
+  // Ensure pillarbox / letterbox margins remain solid black
   if (vp.x > 0) {
     RECT left_rect = {0, 0, vp.x, client_h};
     RECT right_rect = {vp.x + vp.width, 0, client_w, client_h};
@@ -377,15 +382,7 @@ void Window::render(const Ppu& ppu) {
 ViewportRect calculate_viewport_rect(int client_width, int client_height, AspectRatio ratio) {
   if (client_width <= 0 || client_height <= 0) return {0, 0, 0, 0};
   if (ratio == AspectRatio::Stretch) return {0, 0, client_width, client_height};
-  double target_aspect = 1.5;
-  switch (ratio) {
-    case AspectRatio::Original_3_2:  target_aspect = 3.0 / 2.0; break;
-    case AspectRatio::Ratio_4_3:     target_aspect = 4.0 / 3.0; break;
-    case AspectRatio::Ratio_16_9:    target_aspect = 16.0 / 9.0; break;
-    case AspectRatio::Ratio_21_9:    target_aspect = 21.0 / 9.0; break;
-    case AspectRatio::Ratio_21_10:   target_aspect = 21.0 / 10.0; break;
-    case AspectRatio::Stretch:      return {0, 0, client_width, client_height};
-  }
+  const double target_aspect = 3.0 / 2.0;
   const double client_aspect = static_cast<double>(client_width) / static_cast<double>(client_height);
   if (client_aspect > target_aspect) {
     int vp_h = client_height;
@@ -406,6 +403,7 @@ Window::~Window() {}
 bool Window::process_events(Hardware& /*hardware*/) { return false; }
 void Window::render(const Ppu& /*ppu*/) {}
 void Window::set_aspect_ratio(AspectRatio ratio) { aspect_ratio_ = ratio; }
+void Window::resize_client(int /*width*/, int /*height*/) {}
 std::string Window::consume_pending_rom() { return ""; }
 std::string Window::open_file_dialog(void* /*parent_hwnd*/) { return ""; }
 void Window::update_menu_checks() {}

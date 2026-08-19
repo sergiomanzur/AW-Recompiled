@@ -3,6 +3,7 @@
 #include "aw/memory.hpp"
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace aw {
 
@@ -24,6 +25,8 @@ public:
   int sample_rate() const { return sample_rate_; }
 
 private:
+  void pump_waveout();
+
   void* hwaveout_ = nullptr;
   int sample_rate_ = 32768;
   bool is_active_ = false;
@@ -38,7 +41,7 @@ private:
   std::int8_t fifo_a_sample_ = 0;
   std::int8_t fifo_b_sample_ = 0;
 
-  // Sample accumulation buffer (enough for one frame at 32768 Hz ~= 548 samples)
+  // Sample accumulation buffer
   static constexpr int kMaxSamplesPerFrame = 1024;
   std::array<std::int16_t, kMaxSamplesPerFrame * 2> sample_buffer_{};  // stereo interleaved
   int sample_count_ = 0;
@@ -47,11 +50,19 @@ private:
   std::uint32_t cycle_accumulator_ = 0;
   static constexpr std::uint32_t kCyclesPerSample = 512;  // ~16.78MHz / 32768Hz
 
-  // WaveOut ring-buffer headers (8 buffers to prevent WHDR_INQUEUE driver collisions)
-  static constexpr int kNumBuffers = 8;
+  // WaveOut multi-buffer ring system for smooth crackle-free playback
+  static constexpr int kBlockSamples = 512;  // ~15.6ms per block
+  static constexpr int kNumBuffers = 16;     // 16 blocks total capacity
+
   void* wave_headers_[kNumBuffers]{};
-  std::array<std::int16_t, kMaxSamplesPerFrame * 2> wave_buffers_[kNumBuffers]{};
+  std::array<std::int16_t, kBlockSamples * 2> wave_buffers_[kNumBuffers]{};
   int current_buffer_ = 0;
+
+  // Ring buffer decoupling core sample generation from waveOut output
+  static constexpr std::size_t kRingSize = 32768; // 16384 stereo frames
+  std::vector<std::int16_t> ring_buffer_;
+  std::size_t ring_head_ = 0;
+  std::size_t ring_tail_ = 0;
 };
 
 }  // namespace aw
