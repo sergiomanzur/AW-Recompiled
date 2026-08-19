@@ -760,7 +760,7 @@ bool Window::process_events(Hardware& hardware) {
     }
   }
 
-  // 3. PC Native Mouse Navigation & Clicking
+  // 3. PC Native Mouse Navigation & Direct Hand Cursor Tracking
   if (input_mapping_.mouse_enabled && hwnd_ != nullptr) {
     HWND hwnd = static_cast<HWND>(hwnd_);
     POINT cursor_pos;
@@ -769,7 +769,38 @@ bool Window::process_events(Hardware& hardware) {
       if (cursor_pos.x >= vp.x && cursor_pos.x < vp.x + vp.width &&
           cursor_pos.y >= vp.y && cursor_pos.y < vp.y + vp.height && vp.width > 0 && vp.height > 0) {
 
-        // Left Click = Select (GBA A)
+        // Normalize mouse cursor to GBA screen pixels (240 x 160)
+        const float norm_x = static_cast<float>(cursor_pos.x - vp.x) / static_cast<float>(vp.width);
+        const float norm_y = static_cast<float>(cursor_pos.y - vp.y) / static_cast<float>(vp.height);
+
+        const int gba_x = std::clamp(static_cast<int>(norm_x * 240.0f), 0, 239);
+        const int gba_y = std::clamp(static_cast<int>(norm_y * 160.0f), 0, 159);
+
+        // Convert GBA screen pixels to 16x16 grid cell targets (15 columns x 10 rows)
+        target_tile_x_ = gba_x / 16;
+        target_tile_y_ = gba_y / 16;
+
+        // Drive D-Pad pulses towards target hovered tile on a 2-frame cadence for rapid smooth navigation
+        if (move_cooldown_ <= 0) {
+          bool moved = false;
+          // In menus and name entry screens (like selecting letters 'S'), row navigation happens first
+          if (target_tile_x_ > 0) {
+            hardware.keys_pressed |= kKeyRight;
+            target_tile_x_--;
+            moved = true;
+          } else if (target_tile_y_ > 0) {
+            hardware.keys_pressed |= kKeyDown;
+            target_tile_y_--;
+            moved = true;
+          }
+          if (moved) {
+            move_cooldown_ = 2; // 2 frames repeat cadence
+          }
+        } else {
+          move_cooldown_--;
+        }
+
+        // Left Click = Select / Confirm (GBA A)
         if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) {
           hardware.keys_pressed |= kKeyA;
         }

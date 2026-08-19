@@ -93,6 +93,11 @@ private:
 
   InputMapping input_mapping_;
 
+  // PC Native Mouse Cursor Navigation State (Target GBA Grid Coordinates & Repeat Counter)
+  int target_tile_x_ = -1;
+  int target_tile_y_ = -1;
+  int move_cooldown_ = 0;
+
   // High-resolution & Scale2x filtering buffers
   std::vector<std::uint32_t> scale2x_buffer_;
 
