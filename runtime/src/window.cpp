@@ -68,6 +68,10 @@ constexpr UINT IDM_ASPECT_16_9     = 2003;
 constexpr UINT IDM_ASPECT_21_9     = 2004;
 constexpr UINT IDM_ASPECT_21_10    = 2005;
 constexpr UINT IDM_ASPECT_STRETCH  = 2006;
+constexpr UINT IDM_RES_NATIVE      = 2101;
+constexpr UINT IDM_RES_720P        = 2102;
+constexpr UINT IDM_RES_1080P       = 2103;
+constexpr UINT IDM_RES_4K          = 2104;
 constexpr UINT IDM_HELP_CONTROLS   = 3001;
 constexpr UINT IDM_HELP_ABOUT      = 3002;
 
@@ -98,6 +102,15 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
             case IDM_ASPECT_21_9:    win->set_aspect_ratio(AspectRatio::Ratio_21_9); break;
             case IDM_ASPECT_21_10:   win->set_aspect_ratio(AspectRatio::Ratio_21_10); break;
             case IDM_ASPECT_STRETCH: win->set_aspect_ratio(AspectRatio::Stretch); break;
+          }
+        }
+      } else if (id >= IDM_RES_NATIVE && id <= IDM_RES_4K) {
+        if (win != nullptr) {
+          switch (id) {
+            case IDM_RES_NATIVE: win->set_internal_resolution(InternalResolution::Native); break;
+            case IDM_RES_720P:   win->set_internal_resolution(InternalResolution::Res_720p); break;
+            case IDM_RES_1080P:  win->set_internal_resolution(InternalResolution::Res_1080p); break;
+            case IDM_RES_4K:     win->set_internal_resolution(InternalResolution::Res_4K); break;
           }
         }
       } else if (id == IDM_HELP_CONTROLS) {
@@ -152,6 +165,7 @@ Window::Window(int width, int height, const char* title)
   HMENU hMenuBar = CreateMenu();
   HMENU hFileMenu = CreatePopupMenu();
   HMENU hAspectMenu = CreatePopupMenu();
+  HMENU hResMenu = CreatePopupMenu();
   HMENU hHelpMenu = CreatePopupMenu();
 
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_OPEN, "&Open ROM...\tCtrl+O");
@@ -166,11 +180,17 @@ Window::Window(int width, int height, const char* title)
   AppendMenuA(hAspectMenu, MF_SEPARATOR, 0, nullptr);
   AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_STRETCH, "&Stretch to Window");
 
+  AppendMenuA(hResMenu, MF_STRING, IDM_RES_NATIVE, "&Native (240x160)");
+  AppendMenuA(hResMenu, MF_STRING, IDM_RES_720P,   "&720p (1280x720)");
+  AppendMenuA(hResMenu, MF_STRING, IDM_RES_1080P,  "1&080p (1920x1080)");
+  AppendMenuA(hResMenu, MF_STRING, IDM_RES_4K,     "&4K (3840x2160)");
+
   AppendMenuA(hHelpMenu, MF_STRING, IDM_HELP_CONTROLS, "&Controls...");
   AppendMenuA(hHelpMenu, MF_STRING, IDM_HELP_ABOUT, "&About AW-Recompiled...");
 
   AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hFileMenu), "&File");
   AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hAspectMenu), "&Aspect Ratio");
+  AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hResMenu), "&Internal Resolution");
   AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hHelpMenu), "&Help");
 
   menu_ = static_cast<void*>(hMenuBar);
@@ -221,7 +241,7 @@ void Window::set_aspect_ratio(AspectRatio ratio) {
   aspect_ratio_ = ratio;
   update_menu_checks();
 
-  // Resize window frame to match chosen aspect ratio while keeping 3:2 graphics undistorted inside
+  // Resize window frame to match chosen aspect ratio
   switch (ratio) {
     case AspectRatio::Original_3_2:  resize_client(960, 640); break;
     case AspectRatio::Ratio_4_3:     resize_client(960, 720); break;
@@ -229,6 +249,42 @@ void Window::set_aspect_ratio(AspectRatio ratio) {
     case AspectRatio::Ratio_21_9:    resize_client(1260, 540); break;
     case AspectRatio::Ratio_21_10:   resize_client(1134, 540); break;
     case AspectRatio::Stretch:      break;
+  }
+
+  if (hwnd_ != nullptr) {
+    InvalidateRect(static_cast<HWND>(hwnd_), nullptr, TRUE);
+  }
+}
+
+void Window::set_internal_resolution(InternalResolution res) {
+  internal_resolution_ = res;
+  update_menu_checks();
+
+  switch (res) {
+    case InternalResolution::Native:
+      internal_width_ = kGbaWidth;
+      internal_height_ = kGbaHeight;
+      resize_client(960, 640);
+      break;
+    case InternalResolution::Res_720p:
+      internal_width_ = 1280;
+      internal_height_ = 720;
+      resize_client(1280, 720);
+      break;
+    case InternalResolution::Res_1080p:
+      internal_width_ = 1920;
+      internal_height_ = 1080;
+      resize_client(1920, 1080);
+      break;
+    case InternalResolution::Res_4K:
+      internal_width_ = 3840;
+      internal_height_ = 2160;
+      resize_client(3840, 2160);
+      break;
+  }
+
+  if (internal_width_ > 0 && internal_height_ > 0) {
+    internal_buffer_.resize(internal_width_ * internal_height_);
   }
 
   if (hwnd_ != nullptr) {
@@ -260,6 +316,11 @@ void Window::update_menu_checks() {
   CheckMenuItem(hMenuBar, IDM_ASPECT_21_9,    aspect_ratio_ == AspectRatio::Ratio_21_9    ? MF_CHECKED : MF_UNCHECKED);
   CheckMenuItem(hMenuBar, IDM_ASPECT_21_10,   aspect_ratio_ == AspectRatio::Ratio_21_10   ? MF_CHECKED : MF_UNCHECKED);
   CheckMenuItem(hMenuBar, IDM_ASPECT_STRETCH, aspect_ratio_ == AspectRatio::Stretch      ? MF_CHECKED : MF_UNCHECKED);
+
+  CheckMenuItem(hMenuBar, IDM_RES_NATIVE, internal_resolution_ == InternalResolution::Native    ? MF_CHECKED : MF_UNCHECKED);
+  CheckMenuItem(hMenuBar, IDM_RES_720P,   internal_resolution_ == InternalResolution::Res_720p  ? MF_CHECKED : MF_UNCHECKED);
+  CheckMenuItem(hMenuBar, IDM_RES_1080P,  internal_resolution_ == InternalResolution::Res_1080p ? MF_CHECKED : MF_UNCHECKED);
+  CheckMenuItem(hMenuBar, IDM_RES_4K,     internal_resolution_ == InternalResolution::Res_4K    ? MF_CHECKED : MF_UNCHECKED);
 }
 
 std::string Window::open_file_dialog(void* parent_hwnd) {
@@ -361,28 +422,66 @@ void Window::render(const Ppu& ppu) {
     FillRect(hdc, &bottom_rect, black_brush);
   }
 
-  BITMAPINFO bmi = {};
-  bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-  bmi.bmiHeader.biWidth = kGbaWidth;
-  bmi.bmiHeader.biHeight = -kGbaHeight; // Top-down
-  bmi.bmiHeader.biPlanes = 1;
-  bmi.bmiHeader.biBitCount = 32;
-  bmi.bmiHeader.biCompression = BI_RGB;
+  if (internal_resolution_ != InternalResolution::Native && !internal_buffer_.empty()) {
+    const int target_w = internal_width_;
+    const int target_h = internal_height_;
 
-  StretchDIBits(
-      hdc,
-      vp.x,
-      vp.y,
-      vp.width,
-      vp.height,
-      0,
-      0,
-      kGbaWidth,
-      kGbaHeight,
-      ppu.framebuffer.data(),
-      &bmi,
-      DIB_RGB_COLORS,
-      SRCCOPY);
+    for (int y = 0; y < target_h; ++y) {
+      const int src_y = (y * kGbaHeight) / target_h;
+      const std::uint32_t* src_row = &ppu.framebuffer[src_y * kGbaWidth];
+      std::uint32_t* dst_row = &internal_buffer_[y * target_w];
+      for (int x = 0; x < target_w; ++x) {
+        const int src_x = (x * kGbaWidth) / target_w;
+        dst_row[x] = src_row[src_x];
+      }
+    }
+
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = target_w;
+    bmi.bmiHeader.biHeight = -target_h; // Top-down
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    StretchDIBits(
+        hdc,
+        vp.x,
+        vp.y,
+        vp.width,
+        vp.height,
+        0,
+        0,
+        target_w,
+        target_h,
+        internal_buffer_.data(),
+        &bmi,
+        DIB_RGB_COLORS,
+        SRCCOPY);
+  } else {
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = kGbaWidth;
+    bmi.bmiHeader.biHeight = -kGbaHeight; // Top-down
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    StretchDIBits(
+        hdc,
+        vp.x,
+        vp.y,
+        vp.width,
+        vp.height,
+        0,
+        0,
+        kGbaWidth,
+        kGbaHeight,
+        ppu.framebuffer.data(),
+        &bmi,
+        DIB_RGB_COLORS,
+        SRCCOPY);
+  }
 }
 
 #else
@@ -390,7 +489,15 @@ void Window::render(const Ppu& ppu) {
 ViewportRect calculate_viewport_rect(int client_width, int client_height, AspectRatio ratio) {
   if (client_width <= 0 || client_height <= 0) return {0, 0, 0, 0};
   if (ratio == AspectRatio::Stretch) return {0, 0, client_width, client_height};
-  const double target_aspect = 3.0 / 2.0;
+  double target_aspect = 3.0 / 2.0;
+  switch (ratio) {
+    case AspectRatio::Original_3_2:  target_aspect = 3.0 / 2.0; break;
+    case AspectRatio::Ratio_4_3:     target_aspect = 4.0 / 3.0; break;
+    case AspectRatio::Ratio_16_9:    target_aspect = 16.0 / 9.0; break;
+    case AspectRatio::Ratio_21_9:    target_aspect = 21.0 / 9.0; break;
+    case AspectRatio::Ratio_21_10:   target_aspect = 21.0 / 10.0; break;
+    case AspectRatio::Stretch:      break;
+  }
   const double client_aspect = static_cast<double>(client_width) / static_cast<double>(client_height);
   if (client_aspect > target_aspect) {
     int vp_h = client_height;
@@ -411,6 +518,7 @@ Window::~Window() {}
 bool Window::process_events(Hardware& /*hardware*/) { return false; }
 void Window::render(const Ppu& /*ppu*/) {}
 void Window::set_aspect_ratio(AspectRatio ratio) { aspect_ratio_ = ratio; }
+void Window::set_internal_resolution(InternalResolution res) { internal_resolution_ = res; }
 void Window::resize_client(int /*width*/, int /*height*/) {}
 std::string Window::consume_pending_rom() { return ""; }
 std::string Window::open_file_dialog(void* /*parent_hwnd*/) { return ""; }

@@ -129,15 +129,28 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
     std::cout << "Core audio sample rate: " << core_sample_rate << " Hz (audio backend "
               << (audio.is_active() ? "active" : "inactive") << ")\n";
 
-    // GBA runs at 32768 Hz; the waveOut backend is opened at the same rate, so
-    // no resampling is required. Pull a few frames' worth of samples per tick.
-    std::vector<std::int16_t> audio_samples(2048 * 2);
+    // The core's sample rate can change at runtime (games raising SOUNDBIAS
+    // resolution switch from 32768 Hz to 65536 Hz). Pull a few frames' worth
+    // of samples per tick; no resampling is needed as long as the waveOut
+    // device follows the core's rate.
+    std::vector<std::int16_t> audio_samples(4096 * 2);
     std::uint64_t total_audio_samples = 0;
     std::uint64_t frames_run = 0;
 
     using clock = std::chrono::steady_clock;
-    constexpr auto frame_duration = std::chrono::duration_cast<clock::duration>(std::chrono::microseconds(1000000 / 60));
+    // The GBA runs at 16.777216 MHz with 280896 cycles per frame, i.e.
+    // 59.7275 FPS — NOT 60. This is only used as a fallback when the audio
+    // backend is inactive; otherwise the audio device clock paces the loop.
+    constexpr auto frame_duration = std::chrono::duration_cast<clock::duration>(
+        std::chrono::nanoseconds(280896 * std::int64_t(1000000000) / 16777216));
     auto next_frame_time = clock::now();
+
+    // Audio-master pacing: keep roughly this many stereo sample frames
+    // buffered (~31ms at 65536 Hz, ~62ms at 32768 Hz). The waveOut device
+    // consumes samples at exactly the core's sample rate, so waiting for the
+    // buffer to drain back to this level locks the game to the audio clock
+    // with no drift, no overruns and no underruns.
+    constexpr int kAudioTargetFrames = 2048;
 
     while (window.is_open()) {
       if (!window.process_events(hardware)) {
@@ -176,8 +189,15 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         }
       }
 
+      // Follow the core's sample rate if the game changed it (SOUNDBIAS).
+      const unsigned current_rate = aw_mgba_audio_sample_rate(core);
+      if (current_rate > 0 && static_cast<int>(current_rate) != audio.sample_rate()) {
+        std::cout << "Audio sample rate changed: " << audio.sample_rate() << " -> " << current_rate << " Hz\n";
+        audio.set_sample_rate(static_cast<int>(current_rate));
+      }
+
       // Drain the core's audio buffer into the waveOut backend.
-      const std::size_t samples_read = aw_mgba_read_audio(core, audio_samples.data(), 2048);
+      const std::size_t samples_read = aw_mgba_read_audio(core, audio_samples.data(), 4096);
       if (samples_read > 0) {
         audio.push_samples(audio_samples.data(), static_cast<int>(samples_read));
         total_audio_samples += samples_read;
@@ -189,14 +209,25 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         break;
       }
 
-      // Throttle to ~60 FPS.
-      next_frame_time += frame_duration;
-      const auto now = clock::now();
-      if (now < next_frame_time) {
-        std::this_thread::sleep_until(next_frame_time);
+      if (audio.is_active()) {
+        // Audio-master pacing: wait until the audio buffer drains back to the
+        // target level. If the buffer is below target we do not sleep at all,
+        // letting the next frame refill it immediately.
+        int guard_ms = 0;
+        while (audio.queued_frames() > kAudioTargetFrames && guard_ms++ < 50) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        next_frame_time = clock::now();
       } else {
-        // Running behind; reset the deadline to avoid a death spiral.
-        next_frame_time = now;
+        // Fallback: throttle to the GBA's real frame rate (59.7275 FPS).
+        next_frame_time += frame_duration;
+        const auto now = clock::now();
+        if (now < next_frame_time) {
+          std::this_thread::sleep_until(next_frame_time);
+        } else {
+          // Running behind; reset the deadline to avoid a death spiral.
+          next_frame_time = now;
+        }
       }
     }
 

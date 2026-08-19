@@ -21,11 +21,22 @@ public:
   // `count` is the number of stereo sample frames (each 2 int16_t values).
   void push_samples(const std::int16_t* samples, int count);
 
+  // Reopen the audio device at a new sample rate. The mGBA GBA core can change
+  // its rate at runtime (games raising SOUNDBIAS resolution switch from
+  // 32768 Hz to 65536 Hz), and playback must follow or audio plays at the
+  // wrong speed and overflows the buffers.
+  void set_sample_rate(int sample_rate);
+
   bool is_active() const { return is_active_; }
   int sample_rate() const { return sample_rate_; }
 
+  // Total number of stereo sample frames currently buffered (ring buffer
+  // plus blocks queued in waveOut). Used for audio-driven frame pacing.
+  int queued_frames() const;
+
 private:
   void pump_waveout();
+  std::size_t ring_queued_frames() const;
 
   void* hwaveout_ = nullptr;
   int sample_rate_ = 32768;
@@ -51,7 +62,7 @@ private:
   static constexpr std::uint32_t kCyclesPerSample = 512;  // ~16.78MHz / 32768Hz
 
   // WaveOut multi-buffer ring system for smooth crackle-free playback
-  static constexpr int kBlockSamples = 512;  // ~15.6ms per block
+  static constexpr int kBlockSamples = 512;  // ~15.6ms per block at 32768 Hz
   static constexpr int kNumBuffers = 16;     // 16 blocks total capacity
 
   void* wave_headers_[kNumBuffers]{};
