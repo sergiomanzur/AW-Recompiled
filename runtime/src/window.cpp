@@ -5,6 +5,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <commctrl.h>
 #include <commdlg.h>
 #include <xinput.h>
 #pragma comment(lib, "xinput.lib")
@@ -87,6 +88,8 @@ struct DialogData {
   InputMapping temp_mapping;
   HWND key_buttons[Gba_Count]{};
   HWND pad_buttons[Gba_Count]{};
+  HWND combo_controller = nullptr;
+  HWND check_mouse = nullptr;
   int listening_btn_index = -1;
   bool listening_is_pad = false;
   bool saved = false;
@@ -135,9 +138,16 @@ LRESULT CALLBACK remap_dialog_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
         } else if (id == 701) { // Restore Defaults
           data->temp_mapping.reset_to_defaults();
           data->listening_btn_index = -1;
+          SendMessageA(data->combo_controller, CB_SETCURSEL, 0, 0);
+          SendMessageA(data->check_mouse, BM_SETCHECK, BST_CHECKED, 0);
           update_dialog_button_texts(data);
           return 0;
         } else if (id == 702) { // Save / OK
+          data->temp_mapping.controller_index = static_cast<int>(SendMessageA(data->combo_controller, CB_GETCURSEL, 0, 0));
+          if (data->temp_mapping.controller_index == 4) {
+            data->temp_mapping.controller_index = -1; // Disabled
+          }
+          data->temp_mapping.mouse_enabled = (SendMessageA(data->check_mouse, BM_GETCHECK, 0, 0) == BST_CHECKED);
           data->saved = true;
           DestroyWindow(hwnd);
           return 0;
@@ -501,7 +511,7 @@ void Window::show_controls_dialog() {
   DialogData data;
   data.temp_mapping = input_mapping_;
 
-  RECT rect = {0, 0, 560, 480};
+  RECT rect = {0, 0, 580, 540};
   AdjustWindowRect(&rect, WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_DLGFRAME, FALSE);
 
   HWND dlg = CreateWindowExA(
@@ -520,16 +530,43 @@ void Window::show_controls_dialog() {
 
   if (dlg == nullptr) return;
 
+  // Controller Selector Dropdown
+  CreateWindowExA(0, "STATIC", "Active Gamepad Device:", WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 15, 160, 20, dlg, nullptr, instance, nullptr);
+  data.combo_controller = CreateWindowExA(0, "COMBOBOX", "",
+                                          WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+                                          180, 12, 220, 140, dlg, nullptr, instance, nullptr);
+
+  // Populate XInput Gamepads with connection status
+  for (DWORD i = 0; i < 4; ++i) {
+    XINPUT_STATE xs;
+    std::string text = "Controller " + std::to_string(i + 1) + " (XInput)";
+    if (XInputGetState(i, &xs) == ERROR_SUCCESS) {
+      text += " [Connected]";
+    }
+    SendMessageA(data.combo_controller, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text.c_str()));
+  }
+  SendMessageA(data.combo_controller, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("Disabled (Keyboard Only)"));
+
+  int sel_idx = data.temp_mapping.controller_index;
+  if (sel_idx < 0 || sel_idx > 3) sel_idx = 4;
+  SendMessageA(data.combo_controller, CB_SETCURSEL, sel_idx, 0);
+
+  // Mouse Checkbox
+  data.check_mouse = CreateWindowExA(0, "BUTTON", "Enable PC Mouse Navigation & Clicking",
+                                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                      20, 42, 350, 20, dlg, nullptr, instance, nullptr);
+  SendMessageA(data.check_mouse, BM_SETCHECK, data.temp_mapping.mouse_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+
   // Header Static Text
-  CreateWindowExA(0, "STATIC", "Click any button to assign a Keyboard key or Gamepad button:",
-                  WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 15, 520, 20, dlg, nullptr, instance, nullptr);
+  CreateWindowExA(0, "STATIC", "Click any button to rebind Keyboard key or Gamepad button:",
+                  WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 70, 520, 20, dlg, nullptr, instance, nullptr);
 
   // Column Headers
-  CreateWindowExA(0, "STATIC", "GBA Control", WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 40, 130, 20, dlg, nullptr, instance, nullptr);
-  CreateWindowExA(0, "STATIC", "Keyboard Key", WS_CHILD | WS_VISIBLE | SS_CENTER, 160, 40, 170, 20, dlg, nullptr, instance, nullptr);
-  CreateWindowExA(0, "STATIC", "Gamepad / XInput", WS_CHILD | WS_VISIBLE | SS_CENTER, 350, 40, 170, 20, dlg, nullptr, instance, nullptr);
+  CreateWindowExA(0, "STATIC", "GBA Control", WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 95, 130, 20, dlg, nullptr, instance, nullptr);
+  CreateWindowExA(0, "STATIC", "Keyboard Key", WS_CHILD | WS_VISIBLE | SS_CENTER, 160, 95, 170, 20, dlg, nullptr, instance, nullptr);
+  CreateWindowExA(0, "STATIC", "Gamepad / XInput", WS_CHILD | WS_VISIBLE | SS_CENTER, 350, 95, 170, 20, dlg, nullptr, instance, nullptr);
 
-  int y = 65;
+  int y = 120;
   for (int i = 0; i < Gba_Count; ++i) {
     CreateWindowExA(0, "STATIC", gba_button_name(static_cast<GbaButton>(i)),
                     WS_CHILD | WS_VISIBLE | SS_LEFT, 20, y + 4, 130, 20, dlg, nullptr, instance, nullptr);
@@ -687,43 +724,61 @@ bool Window::process_events(Hardware& hardware) {
       is_open_ = false;
       return false;
     }
-
-    if (msg.message == WM_KEYDOWN || msg.message == WM_KEYUP) {
-      const bool down = (msg.message == WM_KEYDOWN);
-      const WPARAM vk = msg.wParam;
-
-      for (int i = 0; i < Gba_Count; ++i) {
-        if (vk == input_mapping_.bindings[i].key_vk) {
-          const std::uint16_t key_bit = 1u << i;
-          if (down) hardware.keys_pressed |= key_bit;
-          else hardware.keys_pressed &= ~key_bit;
-        }
-      }
-    }
-
     TranslateMessage(&msg);
     DispatchMessageA(&msg);
   }
 
-  // Poll XInput USB Controllers against custom input_mapping_
-  XINPUT_STATE xstate;
-  std::memset(&xstate, 0, sizeof(XINPUT_STATE));
-  if (XInputGetState(0, &xstate) == ERROR_SUCCESS) {
-    const WORD btns = xstate.Gamepad.wButtons;
+  // 1. Evaluate Keyboard Key State (Async Key State tracking for 100% reliable input)
+  for (int i = 0; i < Gba_Count; ++i) {
+    const std::uint32_t vk = input_mapping_.bindings[i].key_vk;
+    if (vk != 0 && (GetAsyncKeyState(static_cast<int>(vk)) & 0x8000)) {
+      hardware.keys_pressed |= (1u << i);
+    }
+  }
 
-    for (int i = 0; i < Gba_Count; ++i) {
-      const std::uint16_t pad_mask = input_mapping_.bindings[i].pad_button;
-      if (pad_mask != 0 && (btns & pad_mask)) {
-        hardware.keys_pressed |= (1u << i);
+  // 2. Poll Selected XInput Gamepad Device
+  const int ctrl_idx = input_mapping_.controller_index;
+  if (ctrl_idx >= 0 && ctrl_idx < 4) {
+    XINPUT_STATE xstate;
+    std::memset(&xstate, 0, sizeof(XINPUT_STATE));
+    if (XInputGetState(static_cast<DWORD>(ctrl_idx), &xstate) == ERROR_SUCCESS) {
+      const WORD btns = xstate.Gamepad.wButtons;
+
+      for (int i = 0; i < Gba_Count; ++i) {
+        const std::uint16_t pad_mask = input_mapping_.bindings[i].pad_button;
+        if (pad_mask != 0 && (btns & pad_mask)) {
+          hardware.keys_pressed |= (1u << i);
+        }
+      }
+
+      // Analog Thumbstick to D-Pad mapping with deadzone
+      constexpr SHORT kDeadZone = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
+      if (xstate.Gamepad.sThumbLY > kDeadZone) hardware.keys_pressed |= kKeyUp;
+      if (xstate.Gamepad.sThumbLY < -kDeadZone) hardware.keys_pressed |= kKeyDown;
+      if (xstate.Gamepad.sThumbLX < -kDeadZone) hardware.keys_pressed |= kKeyLeft;
+      if (xstate.Gamepad.sThumbLX > kDeadZone) hardware.keys_pressed |= kKeyRight;
+    }
+  }
+
+  // 3. PC Native Mouse Navigation & Clicking
+  if (input_mapping_.mouse_enabled && hwnd_ != nullptr) {
+    HWND hwnd = static_cast<HWND>(hwnd_);
+    POINT cursor_pos;
+    if (GetCursorPos(&cursor_pos) && ScreenToClient(hwnd, &cursor_pos)) {
+      const ViewportRect vp = cached_viewport_;
+      if (cursor_pos.x >= vp.x && cursor_pos.x < vp.x + vp.width &&
+          cursor_pos.y >= vp.y && cursor_pos.y < vp.y + vp.height && vp.width > 0 && vp.height > 0) {
+
+        // Left Click = Select (GBA A)
+        if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) {
+          hardware.keys_pressed |= kKeyA;
+        }
+        // Right Click = Cancel / Info (GBA B)
+        if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) {
+          hardware.keys_pressed |= kKeyB;
+        }
       }
     }
-
-    // Analog Thumbstick to D-Pad mapping with deadzone
-    constexpr SHORT kDeadZone = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
-    if (xstate.Gamepad.sThumbLY > kDeadZone) hardware.keys_pressed |= kKeyUp;
-    if (xstate.Gamepad.sThumbLY < -kDeadZone) hardware.keys_pressed |= kKeyDown;
-    if (xstate.Gamepad.sThumbLX < -kDeadZone) hardware.keys_pressed |= kKeyLeft;
-    if (xstate.Gamepad.sThumbLX > kDeadZone) hardware.keys_pressed |= kKeyRight;
   }
 
   return is_open_;

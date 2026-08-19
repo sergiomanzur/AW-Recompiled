@@ -27,6 +27,8 @@ enum GbaButton {
 
 struct InputMapping {
   ControlBinding bindings[Gba_Count];
+  int controller_index = 0; // 0 = Controller 1, 1 = Controller 2, ..., -1 = Disabled
+  bool mouse_enabled = true; // PC Native Mouse Navigation enabled
 
   void reset_to_defaults();
   void load_from_config(const ConfigFile& config);

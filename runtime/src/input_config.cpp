@@ -27,6 +27,9 @@ const char* gba_button_name(GbaButton btn) {
 }
 
 void InputMapping::reset_to_defaults() {
+  controller_index = 0;
+  mouse_enabled = true;
+
   // Defaults: Keyboard
   bindings[Gba_A].key_vk      = 'Z';
   bindings[Gba_B].key_vk      = 'X';
@@ -55,6 +58,9 @@ void InputMapping::reset_to_defaults() {
 void InputMapping::load_from_config(const ConfigFile& config) {
   reset_to_defaults();
 
+  controller_index = config.get_int("Input", "controller_index", 0);
+  mouse_enabled = config.get_int("Input", "mouse_enabled", 1) != 0;
+
   static const char* keys[Gba_Count] = {
     "key_a", "key_b", "key_select", "key_start",
     "key_right", "key_left", "key_up", "key_down", "key_r", "key_l"
@@ -78,6 +84,9 @@ void InputMapping::load_from_config(const ConfigFile& config) {
 }
 
 void InputMapping::save_to_config(ConfigFile& config) const {
+  config.set_int("Input", "controller_index", controller_index);
+  config.set_int("Input", "mouse_enabled", mouse_enabled ? 1 : 0);
+
   static const char* keys[Gba_Count] = {
     "key_a", "key_b", "key_select", "key_start",
     "key_right", "key_left", "key_up", "key_down", "key_r", "key_l"
@@ -107,6 +116,12 @@ std::string vk_to_string(std::uint32_t vk) {
     case 0x26: return "Up Arrow";
     case 0x27: return "Right Arrow";
     case 0x28: return "Down Arrow";
+    case 'W': return "W";
+    case 'A': return "A";
+    case 'S': return "S";
+    case 'D': return "D";
+    case 'J': return "J";
+    case 'K': return "K";
     default:
       if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9')) {
         return std::string(1, static_cast<char>(vk));
