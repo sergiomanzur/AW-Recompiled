@@ -83,6 +83,93 @@ constexpr UINT IDM_SETTINGS_CONTROLS    = 3002;
 constexpr UINT IDM_HELP_CONTROLS        = 4001;
 constexpr UINT IDM_HELP_ABOUT           = 4002;
 
+struct DialogData {
+  InputMapping temp_mapping;
+  HWND key_buttons[Gba_Count]{};
+  HWND pad_buttons[Gba_Count]{};
+  int listening_btn_index = -1;
+  bool listening_is_pad = false;
+  bool saved = false;
+};
+
+void update_dialog_button_texts(DialogData* data) {
+  for (int i = 0; i < Gba_Count; ++i) {
+    if (data->listening_btn_index == i && !data->listening_is_pad) {
+      SetWindowTextA(data->key_buttons[i], "<Press Key...>");
+    } else {
+      SetWindowTextA(data->key_buttons[i], vk_to_string(data->temp_mapping.bindings[i].key_vk).c_str());
+    }
+
+    if (data->listening_btn_index == i && data->listening_is_pad) {
+      SetWindowTextA(data->pad_buttons[i], "<Press Button...>");
+    } else {
+      SetWindowTextA(data->pad_buttons[i], xinput_button_to_string(data->temp_mapping.bindings[i].pad_button).c_str());
+    }
+  }
+}
+
+LRESULT CALLBACK remap_dialog_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+  DialogData* data = reinterpret_cast<DialogData*>(GetWindowLongPtrA(hwnd, GWLP_USERDATA));
+
+  switch (msg) {
+    case WM_NCCREATE: {
+      CREATESTRUCTA* cs = reinterpret_cast<CREATESTRUCTA*>(lparam);
+      SetWindowLongPtrA(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+      return DefWindowProcA(hwnd, msg, wparam, lparam);
+    }
+    case WM_COMMAND: {
+      const WORD id = LOWORD(wparam);
+      if (data != nullptr) {
+        if (id >= 500 && id < 500 + Gba_Count) {
+          data->listening_btn_index = id - 500;
+          data->listening_is_pad = false;
+          update_dialog_button_texts(data);
+          SetFocus(hwnd);
+          return 0;
+        } else if (id >= 600 && id < 600 + Gba_Count) {
+          data->listening_btn_index = id - 600;
+          data->listening_is_pad = true;
+          update_dialog_button_texts(data);
+          SetFocus(hwnd);
+          return 0;
+        } else if (id == 701) { // Restore Defaults
+          data->temp_mapping.reset_to_defaults();
+          data->listening_btn_index = -1;
+          update_dialog_button_texts(data);
+          return 0;
+        } else if (id == 702) { // Save / OK
+          data->saved = true;
+          DestroyWindow(hwnd);
+          return 0;
+        } else if (id == 703) { // Cancel
+          data->saved = false;
+          DestroyWindow(hwnd);
+          return 0;
+        }
+      }
+      break;
+    }
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN: {
+      if (data != nullptr && data->listening_btn_index >= 0 && !data->listening_is_pad) {
+        const std::uint32_t vk = static_cast<std::uint32_t>(wparam);
+        if (vk != VK_ESCAPE) {
+          data->temp_mapping.bindings[data->listening_btn_index].key_vk = vk;
+        }
+        data->listening_btn_index = -1;
+        update_dialog_button_texts(data);
+        return 0;
+      }
+      break;
+    }
+    case WM_CLOSE: {
+      DestroyWindow(hwnd);
+      return 0;
+    }
+  }
+  return DefWindowProcA(hwnd, msg, wparam, lparam);
+}
+
 void apply_scale2x(const std::uint32_t* src, std::uint32_t* dst, int w, int h) {
   for (int y = 0; y < h; ++y) {
     const int ym1 = (y > 0) ? (y - 1) : 0;
@@ -215,27 +302,9 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
           win->save_config(config);
         }
       } else if (id == IDM_SETTINGS_CONTROLS || id == IDM_HELP_CONTROLS) {
-        MessageBoxA(hwnd,
-          "AW-Recompiled Controls & Controller Support:\n\n"
-          "⌨️ Keyboard Mapping:\n"
-          "  D-Pad:  Arrow Keys / W A S D\n"
-          "  A Button:  Z / J\n"
-          "  B Button:  X / K\n"
-          "  Start:  Enter\n"
-          "  Select:  Backspace / Shift\n"
-          "  L Shoulder:  Q\n"
-          "  R Shoulder:  E\n\n"
-          "🎮 XInput / USB Gamepad Mapping:\n"
-          "  D-Pad / Left Stick: Move Cursor / Map\n"
-          "  A / X Buttons: Confirm / Select (GBA A)\n"
-          "  B / Y Buttons: Cancel / Info (GBA B)\n"
-          "  Start / Menu: Pause Menu (GBA Start)\n"
-          "  Back / View: Status / Map View (GBA Select)\n"
-          "  LB / LT: Fast Move / Page Left (GBA L)\n"
-          "  RB / RT: Fast Move / Page Right (GBA R)\n\n"
-          "All preferences and keybindings are saved to config.ini.",
-          "Controls & Input Settings",
-          MB_OK | MB_ICONINFORMATION);
+        if (win != nullptr) {
+          win->show_controls_dialog();
+        }
       } else if (id == IDM_HELP_ABOUT) {
         MessageBoxA(hwnd,
           "AW-Recompiled v0.1 Alpha\n\n"
@@ -271,6 +340,16 @@ Window::Window(int width, int height, const char* title)
   wc.lpszClassName = "AdvanceWarsWindowClass";
 
   RegisterClassExA(&wc);
+
+  // Register Dialog Class
+  WNDCLASSEXA dwc = {};
+  dwc.cbSize = sizeof(WNDCLASSEXA);
+  dwc.lpfnWndProc = remap_dialog_proc;
+  dwc.hInstance = instance;
+  dwc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+  dwc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+  dwc.lpszClassName = "AWControlRemapDialogClass";
+  RegisterClassExA(&dwc);
 
   // Consolidated Win32 Menu Bar
   HMENU hMenuBar = CreateMenu();
@@ -327,6 +406,7 @@ Window::Window(int width, int height, const char* title)
   menu_ = static_cast<void*>(hMenuBar);
 
   scale2x_buffer_.resize((kGbaWidth * 2) * (kGbaHeight * 2));
+  input_mapping_.reset_to_defaults();
 
   RECT rect = {0, 0, width, height};
   AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, TRUE);
@@ -414,6 +494,115 @@ void Window::set_video_filter(VideoFilter filter) {
   }
 }
 
+void Window::show_controls_dialog() {
+  HINSTANCE instance = GetModuleHandleA(nullptr);
+  HWND parent = static_cast<HWND>(hwnd_);
+
+  DialogData data;
+  data.temp_mapping = input_mapping_;
+
+  RECT rect = {0, 0, 560, 480};
+  AdjustWindowRect(&rect, WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_DLGFRAME, FALSE);
+
+  HWND dlg = CreateWindowExA(
+      WS_EX_DLGMODALFRAME,
+      "AWControlRemapDialogClass",
+      "Configure Controls & Gamepad - AW-Recompiled",
+      WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+      CW_USEDEFAULT,
+      CW_USEDEFAULT,
+      rect.right - rect.left,
+      rect.bottom - rect.top,
+      parent,
+      nullptr,
+      instance,
+      &data);
+
+  if (dlg == nullptr) return;
+
+  // Header Static Text
+  CreateWindowExA(0, "STATIC", "Click any button to assign a Keyboard key or Gamepad button:",
+                  WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 15, 520, 20, dlg, nullptr, instance, nullptr);
+
+  // Column Headers
+  CreateWindowExA(0, "STATIC", "GBA Control", WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 40, 130, 20, dlg, nullptr, instance, nullptr);
+  CreateWindowExA(0, "STATIC", "Keyboard Key", WS_CHILD | WS_VISIBLE | SS_CENTER, 160, 40, 170, 20, dlg, nullptr, instance, nullptr);
+  CreateWindowExA(0, "STATIC", "Gamepad / XInput", WS_CHILD | WS_VISIBLE | SS_CENTER, 350, 40, 170, 20, dlg, nullptr, instance, nullptr);
+
+  int y = 65;
+  for (int i = 0; i < Gba_Count; ++i) {
+    CreateWindowExA(0, "STATIC", gba_button_name(static_cast<GbaButton>(i)),
+                    WS_CHILD | WS_VISIBLE | SS_LEFT, 20, y + 4, 130, 20, dlg, nullptr, instance, nullptr);
+
+    data.key_buttons[i] = CreateWindowExA(0, "BUTTON", "",
+                                          WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                          160, y, 170, 24, dlg, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(500 + i)), instance, nullptr);
+
+    data.pad_buttons[i] = CreateWindowExA(0, "BUTTON", "",
+                                          WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                          350, y, 170, 24, dlg, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(600 + i)), instance, nullptr);
+    y += 30;
+  }
+
+  // Bottom Buttons
+  CreateWindowExA(0, "BUTTON", "Restore Defaults", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                  20, y + 10, 140, 30, dlg, reinterpret_cast<HMENU>(701), instance, nullptr);
+
+  CreateWindowExA(0, "BUTTON", "OK / Save", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+                  280, y + 10, 110, 30, dlg, reinterpret_cast<HMENU>(702), instance, nullptr);
+
+  CreateWindowExA(0, "BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                  410, y + 10, 110, 30, dlg, reinterpret_cast<HMENU>(703), instance, nullptr);
+
+  update_dialog_button_texts(&data);
+
+  EnableWindow(parent, FALSE);
+
+  MSG msg;
+  XINPUT_STATE last_xstate;
+  std::memset(&last_xstate, 0, sizeof(XINPUT_STATE));
+  XInputGetState(0, &last_xstate);
+
+  while (IsWindow(dlg)) {
+    if (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
+      if (msg.message == WM_QUIT) {
+        PostQuitMessage(0);
+        break;
+      }
+      TranslateMessage(&msg);
+      DispatchMessageA(&msg);
+    }
+
+    // Handle XInput button capture during listening mode
+    if (data.listening_btn_index >= 0 && data.listening_is_pad) {
+      XINPUT_STATE curr_state;
+      if (XInputGetState(0, &curr_state) == ERROR_SUCCESS) {
+        const WORD diff = curr_state.Gamepad.wButtons & ~last_xstate.Gamepad.wButtons;
+        if (diff != 0) {
+          data.temp_mapping.bindings[data.listening_btn_index].pad_button = diff;
+          data.listening_btn_index = -1;
+          update_dialog_button_texts(&data);
+        }
+        last_xstate = curr_state;
+      }
+    } else {
+      XInputGetState(0, &last_xstate);
+    }
+
+    Sleep(10);
+  }
+
+  EnableWindow(parent, TRUE);
+  SetForegroundWindow(parent);
+
+  if (data.saved) {
+    input_mapping_ = data.temp_mapping;
+    ConfigFile config;
+    config.load("config.ini");
+    save_config(config);
+  }
+}
+
 void Window::load_config(const ConfigFile& config) {
   const int aspect = config.get_int("Display", "aspect_ratio", 0);
   const int res = config.get_int("Display", "internal_resolution", 0);
@@ -422,6 +611,8 @@ void Window::load_config(const ConfigFile& config) {
   set_aspect_ratio(static_cast<AspectRatio>(std::clamp(aspect, 0, 5)));
   set_internal_resolution(static_cast<InternalResolution>(std::clamp(res, 0, 3)));
   set_video_filter(static_cast<VideoFilter>(std::clamp(filter, 0, 2)));
+
+  input_mapping_.load_from_config(config);
 }
 
 void Window::save_config(ConfigFile& config) const {
@@ -431,6 +622,7 @@ void Window::save_config(ConfigFile& config) const {
   if (!pending_rom_path_.empty()) {
     config.set_string("Paths", "rom_path", pending_rom_path_);
   }
+  input_mapping_.save_to_config(config);
   config.save("config.ini");
 }
 
@@ -500,21 +692,12 @@ bool Window::process_events(Hardware& hardware) {
       const bool down = (msg.message == WM_KEYDOWN);
       const WPARAM vk = msg.wParam;
 
-      std::uint16_t key_bit = 0;
-      if (vk == VK_UP || vk == 'W') key_bit = kKeyUp;
-      else if (vk == VK_DOWN || vk == 'S') key_bit = kKeyDown;
-      else if (vk == VK_LEFT || vk == 'A') key_bit = kKeyLeft;
-      else if (vk == VK_RIGHT || vk == 'D') key_bit = kKeyRight;
-      else if (vk == 'Z' || vk == 'J') key_bit = kKeyA;
-      else if (vk == 'X' || vk == 'K') key_bit = kKeyB;
-      else if (vk == VK_RETURN) key_bit = kKeyStart;
-      else if (vk == VK_BACK || vk == VK_SHIFT) key_bit = kKeySelect;
-      else if (vk == 'Q') key_bit = kKeyL;
-      else if (vk == 'E') key_bit = kKeyR;
-
-      if (key_bit != 0) {
-        if (down) hardware.keys_pressed |= key_bit;
-        else hardware.keys_pressed &= ~key_bit;
+      for (int i = 0; i < Gba_Count; ++i) {
+        if (vk == input_mapping_.bindings[i].key_vk) {
+          const std::uint16_t key_bit = 1u << i;
+          if (down) hardware.keys_pressed |= key_bit;
+          else hardware.keys_pressed &= ~key_bit;
+        }
       }
     }
 
@@ -522,16 +705,18 @@ bool Window::process_events(Hardware& hardware) {
     DispatchMessageA(&msg);
   }
 
-  // Poll XInput USB Controllers
+  // Poll XInput USB Controllers against custom input_mapping_
   XINPUT_STATE xstate;
   std::memset(&xstate, 0, sizeof(XINPUT_STATE));
   if (XInputGetState(0, &xstate) == ERROR_SUCCESS) {
     const WORD btns = xstate.Gamepad.wButtons;
 
-    if (btns & XINPUT_GAMEPAD_DPAD_UP) hardware.keys_pressed |= kKeyUp;
-    if (btns & XINPUT_GAMEPAD_DPAD_DOWN) hardware.keys_pressed |= kKeyDown;
-    if (btns & XINPUT_GAMEPAD_DPAD_LEFT) hardware.keys_pressed |= kKeyLeft;
-    if (btns & XINPUT_GAMEPAD_DPAD_RIGHT) hardware.keys_pressed |= kKeyRight;
+    for (int i = 0; i < Gba_Count; ++i) {
+      const std::uint16_t pad_mask = input_mapping_.bindings[i].pad_button;
+      if (pad_mask != 0 && (btns & pad_mask)) {
+        hardware.keys_pressed |= (1u << i);
+      }
+    }
 
     // Analog Thumbstick to D-Pad mapping with deadzone
     constexpr SHORT kDeadZone = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
@@ -539,13 +724,6 @@ bool Window::process_events(Hardware& hardware) {
     if (xstate.Gamepad.sThumbLY < -kDeadZone) hardware.keys_pressed |= kKeyDown;
     if (xstate.Gamepad.sThumbLX < -kDeadZone) hardware.keys_pressed |= kKeyLeft;
     if (xstate.Gamepad.sThumbLX > kDeadZone) hardware.keys_pressed |= kKeyRight;
-
-    if ((btns & XINPUT_GAMEPAD_A) || (btns & XINPUT_GAMEPAD_X)) hardware.keys_pressed |= kKeyA;
-    if ((btns & XINPUT_GAMEPAD_B) || (btns & XINPUT_GAMEPAD_Y)) hardware.keys_pressed |= kKeyB;
-    if (btns & XINPUT_GAMEPAD_START) hardware.keys_pressed |= kKeyStart;
-    if (btns & XINPUT_GAMEPAD_BACK) hardware.keys_pressed |= kKeySelect;
-    if ((btns & XINPUT_GAMEPAD_LEFT_SHOULDER) || (xstate.Gamepad.bLeftTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD)) hardware.keys_pressed |= kKeyL;
-    if ((btns & XINPUT_GAMEPAD_RIGHT_SHOULDER) || (xstate.Gamepad.bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD)) hardware.keys_pressed |= kKeyR;
   }
 
   return is_open_;
@@ -673,6 +851,7 @@ void Window::render(const Ppu& /*ppu*/) {}
 void Window::set_aspect_ratio(AspectRatio ratio) { aspect_ratio_ = ratio; }
 void Window::set_internal_resolution(InternalResolution res) { internal_resolution_ = res; }
 void Window::set_video_filter(VideoFilter filter) { video_filter_ = filter; }
+void Window::show_controls_dialog() {}
 void Window::load_config(const ConfigFile& /*config*/) {}
 void Window::save_config(ConfigFile& /*config*/) const {}
 void Window::resize_client(int /*width*/, int /*height*/) {}

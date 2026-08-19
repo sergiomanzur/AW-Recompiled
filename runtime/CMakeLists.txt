@@ -25,6 +25,7 @@ add_library(aw_runtime STATIC
   src/cpu_interpreter.cpp
   src/cpu_state.cpp
   src/hardware.cpp
+  src/input_config.cpp
   src/memory.cpp
   src/ppu.cpp
   src/rom.cpp

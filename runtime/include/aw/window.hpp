@@ -2,6 +2,7 @@
 
 #include "aw/config_file.hpp"
 #include "aw/hardware.hpp"
+#include "aw/input_config.hpp"
 #include "aw/ppu.hpp"
 #include <string>
 #include <vector>
@@ -60,6 +61,9 @@ public:
 
   void resize_client(int width, int height);
 
+  // Input mapping dialog
+  void show_controls_dialog();
+
   // Config.ini persistence
   void load_config(const ConfigFile& config);
   void save_config(ConfigFile& config) const;
@@ -86,6 +90,8 @@ private:
   InternalResolution internal_resolution_ = InternalResolution::Native;
   VideoFilter video_filter_ = VideoFilter::Bilinear;
   std::string pending_rom_path_;
+
+  InputMapping input_mapping_;
 
   // High-resolution & Scale2x filtering buffers
   std::vector<std::uint32_t> scale2x_buffer_;
