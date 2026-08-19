@@ -1,0 +1,3 @@
+#pragma once
+
+#define AW_DEFAULT_ROM_PATH "@AW_TEST_ROM_PATH@"

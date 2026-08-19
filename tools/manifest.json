@@ -1,0 +1,48 @@
+{
+  "project": "advance-wars-recomp",
+  "platform": "Game Boy Advance",
+  "tools": [
+    {
+      "name": "agbcc",
+      "kind": "compiler",
+      "source": "https://github.com/pret/agbcc.git",
+      "local_path": "tools/src/agbcc",
+      "purpose": "Historical GCC-derived compiler used by many GBA matching decompilation projects."
+    },
+    {
+      "name": "gba-tools",
+      "kind": "rom-tools",
+      "source": "https://github.com/devkitPro/gba-tools.git",
+      "local_path": "tools/src/gba-tools",
+      "purpose": "Provides gbafix and related GBA ROM utilities."
+    },
+    {
+      "name": "luvdis",
+      "kind": "disassembler",
+      "source": "PyPI package: luvdis",
+      "local_path": ".venv",
+      "purpose": "Pure-Python GBA disassembler useful for initial ROM mapping."
+    },
+    {
+      "name": "arm-none-eabi-binutils",
+      "kind": "assembler-linker",
+      "source": "devkitARM, system package, or Docker image",
+      "local_path": "PATH",
+      "purpose": "ARM/Thumb assembler, linker, objcopy, and objdump for GBA binaries."
+    },
+    {
+      "name": "mGBA",
+      "kind": "emulator-debugger",
+      "source": "https://mgba.io/",
+      "local_path": "PATH",
+      "purpose": "Runtime smoke tests, debugging, and frame/audio validation."
+    },
+    {
+      "name": "Ghidra",
+      "kind": "static-analysis",
+      "source": "https://ghidra-sre.org/",
+      "local_path": "PATH",
+      "purpose": "Static analysis and function investigation."
+    }
+  ]
+}

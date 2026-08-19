@@ -1,0 +1,30 @@
+# Local tool installs and fetched source drops
+.venv/
+tools/src/
+tools/bin/
+tools/agbcc/
+tools/gba-tools/
+
+# User-supplied ROMs and generated binaries
+baserom*.gba
+*.gba
+*.elf
+*.map
+*.o
+*.d
+
+# Build output
+build/
+out/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+
+# Temporary diagnostic logs and test screenshots
+*.log
+*.png
+*.ppm
+*.bmp
+

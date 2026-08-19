@@ -1,0 +1,5 @@
+capstone>=5.0,<6
+intervaltree>=3.1,<4
+luvdis>=0.1
+pyelftools>=0.31,<1
+setuptools>=68,<81
