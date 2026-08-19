@@ -23,6 +23,12 @@ enum class InternalResolution {
   Res_4K     // 4K (3840x2160)
 };
 
+enum class VideoFilter {
+  NearestNeighbor, // Sharp, crisp retro pixels
+  Bilinear,        // Smooth hardware anti-aliased interpolation (HALFTONE)
+  Scale2x          // HD 2x pixel art smoothing filter
+};
+
 struct ViewportRect {
   int x = 0;
   int y = 0;
@@ -48,6 +54,9 @@ public:
   void set_internal_resolution(InternalResolution res);
   InternalResolution internal_resolution() const { return internal_resolution_; }
 
+  void set_video_filter(VideoFilter filter);
+  VideoFilter video_filter() const { return video_filter_; }
+
   void resize_client(int width, int height);
 
   // Returns true if the user selected a new ROM from the File -> Open ROM menu
@@ -70,12 +79,11 @@ private:
   int height_ = 640;
   AspectRatio aspect_ratio_ = AspectRatio::Original_3_2;
   InternalResolution internal_resolution_ = InternalResolution::Native;
+  VideoFilter video_filter_ = VideoFilter::Bilinear;
   std::string pending_rom_path_;
 
-  // High-resolution internal rendering target buffer
-  std::vector<std::uint32_t> internal_buffer_;
-  int internal_width_ = kGbaWidth;
-  int internal_height_ = kGbaHeight;
+  // High-resolution & Scale2x filtering buffers
+  std::vector<std::uint32_t> scale2x_buffer_;
 
   // Viewport caching for clean letterboxing
   int last_client_w_ = 0;

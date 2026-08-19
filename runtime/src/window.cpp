@@ -72,8 +72,45 @@ constexpr UINT IDM_RES_NATIVE      = 2101;
 constexpr UINT IDM_RES_720P        = 2102;
 constexpr UINT IDM_RES_1080P       = 2103;
 constexpr UINT IDM_RES_4K          = 2104;
+constexpr UINT IDM_FILTER_NEAREST  = 2201;
+constexpr UINT IDM_FILTER_BILINEAR = 2202;
+constexpr UINT IDM_FILTER_SCALE2X   = 2203;
 constexpr UINT IDM_HELP_CONTROLS   = 3001;
 constexpr UINT IDM_HELP_ABOUT      = 3002;
+
+void apply_scale2x(const std::uint32_t* src, std::uint32_t* dst, int w, int h) {
+  for (int y = 0; y < h; ++y) {
+    const int ym1 = (y > 0) ? (y - 1) : 0;
+    const int yp1 = (y < h - 1) ? (y + 1) : (h - 1);
+    for (int x = 0; x < w; ++x) {
+      const int xm1 = (x > 0) ? (x - 1) : 0;
+      const int xp1 = (x < w - 1) ? (x + 1) : (w - 1);
+
+      const std::uint32_t B = src[ym1 * w + x];
+      const std::uint32_t D = src[y * w + xm1];
+      const std::uint32_t E = src[y * w + x];
+      const std::uint32_t F = src[y * w + xp1];
+      const std::uint32_t H = src[yp1 * w + x];
+
+      std::uint32_t E0 = E, E1 = E, E2 = E, E3 = E;
+      if (B != H && D != F) {
+        E0 = (D == B) ? D : E;
+        E1 = (B == F) ? F : E;
+        E2 = (D == H) ? D : E;
+        E3 = (H == F) ? F : E;
+      }
+
+      const int out_x = x * 2;
+      const int out_y = y * 2;
+      const int out_w = w * 2;
+
+      dst[out_y * out_w + out_x]       = E0;
+      dst[out_y * out_w + out_x + 1]   = E1;
+      dst[(out_y + 1) * out_w + out_x] = E2;
+      dst[(out_y + 1) * out_w + out_x + 1] = E3;
+    }
+  }
+}
 
 LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
   Window* win = reinterpret_cast<Window*>(GetWindowLongPtrA(hwnd, GWLP_USERDATA));
@@ -111,6 +148,14 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
             case IDM_RES_720P:   win->set_internal_resolution(InternalResolution::Res_720p); break;
             case IDM_RES_1080P:  win->set_internal_resolution(InternalResolution::Res_1080p); break;
             case IDM_RES_4K:     win->set_internal_resolution(InternalResolution::Res_4K); break;
+          }
+        }
+      } else if (id >= IDM_FILTER_NEAREST && id <= IDM_FILTER_SCALE2X) {
+        if (win != nullptr) {
+          switch (id) {
+            case IDM_FILTER_NEAREST:  win->set_video_filter(VideoFilter::NearestNeighbor); break;
+            case IDM_FILTER_BILINEAR: win->set_video_filter(VideoFilter::Bilinear); break;
+            case IDM_FILTER_SCALE2X:   win->set_video_filter(VideoFilter::Scale2x); break;
           }
         }
       } else if (id == IDM_HELP_CONTROLS) {
@@ -166,6 +211,7 @@ Window::Window(int width, int height, const char* title)
   HMENU hFileMenu = CreatePopupMenu();
   HMENU hAspectMenu = CreatePopupMenu();
   HMENU hResMenu = CreatePopupMenu();
+  HMENU hFilterMenu = CreatePopupMenu();
   HMENU hHelpMenu = CreatePopupMenu();
 
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_OPEN, "&Open ROM...\tCtrl+O");
@@ -185,15 +231,22 @@ Window::Window(int width, int height, const char* title)
   AppendMenuA(hResMenu, MF_STRING, IDM_RES_1080P,  "1&080p (1920x1080)");
   AppendMenuA(hResMenu, MF_STRING, IDM_RES_4K,     "&4K (3840x2160)");
 
+  AppendMenuA(hFilterMenu, MF_STRING, IDM_FILTER_NEAREST,  "&Nearest Neighbor (Crisp Pixels)");
+  AppendMenuA(hFilterMenu, MF_STRING, IDM_FILTER_BILINEAR, "&Bilinear Smooth (Anti-Aliased)");
+  AppendMenuA(hFilterMenu, MF_STRING, IDM_FILTER_SCALE2X,   "&Scale2x HD Filter");
+
   AppendMenuA(hHelpMenu, MF_STRING, IDM_HELP_CONTROLS, "&Controls...");
   AppendMenuA(hHelpMenu, MF_STRING, IDM_HELP_ABOUT, "&About AW-Recompiled...");
 
   AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hFileMenu), "&File");
   AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hAspectMenu), "&Aspect Ratio");
   AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hResMenu), "&Internal Resolution");
+  AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hFilterMenu), "&Video Filter");
   AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hHelpMenu), "&Help");
 
   menu_ = static_cast<void*>(hMenuBar);
+
+  scale2x_buffer_.resize((kGbaWidth * 2) * (kGbaHeight * 2));
 
   RECT rect = {0, 0, width, height};
   AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, TRUE);
@@ -261,31 +314,20 @@ void Window::set_internal_resolution(InternalResolution res) {
   update_menu_checks();
 
   switch (res) {
-    case InternalResolution::Native:
-      internal_width_ = kGbaWidth;
-      internal_height_ = kGbaHeight;
-      resize_client(960, 640);
-      break;
-    case InternalResolution::Res_720p:
-      internal_width_ = 1280;
-      internal_height_ = 720;
-      resize_client(1280, 720);
-      break;
-    case InternalResolution::Res_1080p:
-      internal_width_ = 1920;
-      internal_height_ = 1080;
-      resize_client(1920, 1080);
-      break;
-    case InternalResolution::Res_4K:
-      internal_width_ = 3840;
-      internal_height_ = 2160;
-      resize_client(3840, 2160);
-      break;
+    case InternalResolution::Native:   resize_client(960, 640); break;
+    case InternalResolution::Res_720p:  resize_client(1280, 720); break;
+    case InternalResolution::Res_1080p: resize_client(1920, 1080); break;
+    case InternalResolution::Res_4K:    resize_client(3840, 2160); break;
   }
 
-  if (internal_width_ > 0 && internal_height_ > 0) {
-    internal_buffer_.resize(internal_width_ * internal_height_);
+  if (hwnd_ != nullptr) {
+    InvalidateRect(static_cast<HWND>(hwnd_), nullptr, TRUE);
   }
+}
+
+void Window::set_video_filter(VideoFilter filter) {
+  video_filter_ = filter;
+  update_menu_checks();
 
   if (hwnd_ != nullptr) {
     InvalidateRect(static_cast<HWND>(hwnd_), nullptr, TRUE);
@@ -321,6 +363,10 @@ void Window::update_menu_checks() {
   CheckMenuItem(hMenuBar, IDM_RES_720P,   internal_resolution_ == InternalResolution::Res_720p  ? MF_CHECKED : MF_UNCHECKED);
   CheckMenuItem(hMenuBar, IDM_RES_1080P,  internal_resolution_ == InternalResolution::Res_1080p ? MF_CHECKED : MF_UNCHECKED);
   CheckMenuItem(hMenuBar, IDM_RES_4K,     internal_resolution_ == InternalResolution::Res_4K    ? MF_CHECKED : MF_UNCHECKED);
+
+  CheckMenuItem(hMenuBar, IDM_FILTER_NEAREST,  video_filter_ == VideoFilter::NearestNeighbor ? MF_CHECKED : MF_UNCHECKED);
+  CheckMenuItem(hMenuBar, IDM_FILTER_BILINEAR, video_filter_ == VideoFilter::Bilinear        ? MF_CHECKED : MF_UNCHECKED);
+  CheckMenuItem(hMenuBar, IDM_FILTER_SCALE2X,   video_filter_ == VideoFilter::Scale2x         ? MF_CHECKED : MF_UNCHECKED);
 }
 
 std::string Window::open_file_dialog(void* parent_hwnd) {
@@ -422,24 +468,24 @@ void Window::render(const Ppu& ppu) {
     FillRect(hdc, &bottom_rect, black_brush);
   }
 
-  if (internal_resolution_ != InternalResolution::Native && !internal_buffer_.empty()) {
-    const int target_w = internal_width_;
-    const int target_h = internal_height_;
+  // Set GDI stretch mode for anti-aliased / bilinear smoothing vs crisp pixels
+  if (video_filter_ == VideoFilter::Bilinear || video_filter_ == VideoFilter::Scale2x) {
+    SetStretchBltMode(hdc, HALFTONE);
+    SetBrushOrgEx(hdc, 0, 0, NULL);
+  } else {
+    SetStretchBltMode(hdc, COLORONCOLOR);
+  }
 
-    for (int y = 0; y < target_h; ++y) {
-      const int src_y = (y * kGbaHeight) / target_h;
-      const std::uint32_t* src_row = &ppu.framebuffer[src_y * kGbaWidth];
-      std::uint32_t* dst_row = &internal_buffer_[y * target_w];
-      for (int x = 0; x < target_w; ++x) {
-        const int src_x = (x * kGbaWidth) / target_w;
-        dst_row[x] = src_row[src_x];
-      }
-    }
+  if (video_filter_ == VideoFilter::Scale2x && !scale2x_buffer_.empty()) {
+    apply_scale2x(ppu.framebuffer.data(), scale2x_buffer_.data(), kGbaWidth, kGbaHeight);
+
+    const int src_w = kGbaWidth * 2;
+    const int src_h = kGbaHeight * 2;
 
     BITMAPINFO bmi = {};
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = target_w;
-    bmi.bmiHeader.biHeight = -target_h; // Top-down
+    bmi.bmiHeader.biWidth = src_w;
+    bmi.bmiHeader.biHeight = -src_h; // Top-down
     bmi.bmiHeader.biPlanes = 1;
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
@@ -452,9 +498,9 @@ void Window::render(const Ppu& ppu) {
         vp.height,
         0,
         0,
-        target_w,
-        target_h,
-        internal_buffer_.data(),
+        src_w,
+        src_h,
+        scale2x_buffer_.data(),
         &bmi,
         DIB_RGB_COLORS,
         SRCCOPY);
@@ -519,6 +565,7 @@ bool Window::process_events(Hardware& /*hardware*/) { return false; }
 void Window::render(const Ppu& /*ppu*/) {}
 void Window::set_aspect_ratio(AspectRatio ratio) { aspect_ratio_ = ratio; }
 void Window::set_internal_resolution(InternalResolution res) { internal_resolution_ = res; }
+void Window::set_video_filter(VideoFilter filter) { video_filter_ = filter; }
 void Window::resize_client(int /*width*/, int /*height*/) {}
 std::string Window::consume_pending_rom() { return ""; }
 std::string Window::open_file_dialog(void* /*parent_hwnd*/) { return ""; }
