@@ -22,8 +22,16 @@ ViewportRect calculate_viewport_rect(int client_width, int client_height, Aspect
     return {0, 0, client_width, client_height};
   }
 
-  // ALL non-stretch aspect ratio modes preserve GBA's native 3:2 (1.50) graphics
-  const double target_aspect = 3.0 / 2.0;
+  double target_aspect = 3.0 / 2.0;
+  switch (ratio) {
+    case AspectRatio::Original_3_2:  target_aspect = 3.0 / 2.0; break;
+    case AspectRatio::Ratio_4_3:     target_aspect = 4.0 / 3.0; break;
+    case AspectRatio::Ratio_16_9:    target_aspect = 16.0 / 9.0; break;
+    case AspectRatio::Ratio_21_9:    target_aspect = 21.0 / 9.0; break;
+    case AspectRatio::Ratio_21_10:   target_aspect = 21.0 / 10.0; break;
+    case AspectRatio::Stretch:      break;
+  }
+
   const double client_aspect = static_cast<double>(client_width) / static_cast<double>(client_height);
 
   int vp_width = 0;
@@ -32,13 +40,13 @@ ViewportRect calculate_viewport_rect(int client_width, int client_height, Aspect
   int vp_y = 0;
 
   if (client_aspect > target_aspect) {
-    // Window is wider than 3:2 -> Pillarboxing (black margins on left & right)
+    // Window is wider than target aspect ratio -> Pillarboxing (black margins on left & right)
     vp_height = client_height;
     vp_width = static_cast<int>(client_height * target_aspect + 0.5);
     vp_x = (client_width - vp_width) / 2;
     vp_y = 0;
   } else {
-    // Window is taller than 3:2 -> Letterboxing (black margins on top & bottom)
+    // Window is taller than target aspect ratio -> Letterboxing (black margins on top & bottom)
     vp_width = client_width;
     vp_height = static_cast<int>(client_width / target_aspect + 0.5);
     vp_x = 0;
