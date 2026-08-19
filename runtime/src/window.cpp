@@ -796,9 +796,21 @@ bool Window::process_events(Hardware& hardware) {
           mouse_cursor_.handle_move(gba_x, gba_y);
         } else {
           // Absolute Target Steering:
-          // Mouse pointer defines target tile directly on GBA 240x160 canvas (15x10 grid)
-          const int target_x = std::clamp(gba_x / 16, 0, 14);
-          const int target_y = std::clamp(gba_y / 16, 0, 9);
+          // Detect if mouse pointer is over the Name Entry / Menu Keyboard Box or standard GBA 16x16 map grid
+          int target_x = 0;
+          int target_y = 0;
+
+          if (gba_x >= 76 && gba_x <= 236 && gba_y >= 64 && gba_y <= 138) {
+            // Name Entry Screen Keyboard Layout:
+            // 15 letter columns spaced ~10.4 pixels apart starting at X = 78
+            // 6 rows (A..O, P..., a..o, p..-, 1..0, BACK/OK) spaced ~12 pixels apart starting at Y = 66
+            target_x = std::clamp((gba_x - 78) * 15 / 156, 0, 14);
+            target_y = std::clamp((gba_y - 66) / 12, 0, 5);
+          } else {
+            // Standard Game Map / Main Menu 16x16 Tile Grid (15 columns x 10 rows)
+            target_x = std::clamp(gba_x / 16, 0, 14);
+            target_y = std::clamp(gba_y / 16, 0, 9);
+          }
 
           if (!mouse_grid_init_) {
             cur_grid_x_ = target_x;
