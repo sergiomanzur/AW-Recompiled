@@ -162,6 +162,9 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       throw std::runtime_error("aw_mgba_create failed for ROM: " + rom_path.string());
     }
 
+    // Give the window access to the mGBA core for direct memory mouse cursor support
+    window.set_mgba_core(core);
+
     const unsigned core_sample_rate = aw_mgba_audio_sample_rate(core);
     std::cout << "Core audio sample rate: " << core_sample_rate << " Hz (audio backend "
               << (audio.is_active() ? "active" : "inactive") << ")\n";
@@ -185,6 +188,9 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         if (!core) {
           throw std::runtime_error("aw_mgba_create failed for new ROM: " + rom_path.string());
         }
+        // Update the core pointer for mouse cursor support
+        window.set_mgba_core(core);
+        window.mouse_cursor().reset();
       }
 
       hardware.keys_pressed = 0;

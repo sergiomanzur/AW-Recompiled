@@ -715,6 +715,23 @@ std::string Window::open_file_dialog(void* parent_hwnd) {
   return "";
 }
 
+void Window::set_mgba_core(void* core) {
+  mouse_cursor_.set_core(reinterpret_cast<mCore*>(core));
+}
+
+bool Window::client_to_gba(int client_x, int client_y, int& gba_x, int& gba_y) const {
+  const ViewportRect& vp = cached_viewport_;
+  if (vp.width <= 0 || vp.height <= 0) return false;
+  if (client_x < vp.x || client_x >= vp.x + vp.width) return false;
+  if (client_y < vp.y || client_y >= vp.y + vp.height) return false;
+
+  gba_x = ((client_x - vp.x) * 240) / vp.width;
+  gba_y = ((client_y - vp.y) * 160) / vp.height;
+  gba_x = std::clamp(gba_x, 0, 239);
+  gba_y = std::clamp(gba_y, 0, 159);
+  return true;
+}
+
 bool Window::process_events(Hardware& hardware) {
   if (!is_open_) return false;
 
@@ -760,81 +777,46 @@ bool Window::process_events(Hardware& hardware) {
     }
   }
 
-  // 3. PC Native Precise Mouse Cursor Navigation (Clean Single-Frame Pulse Engine)
+  // 3. PC Native Mouse Cursor Support (Direct Memory Click-to-Navigate)
   if (input_mapping_.mouse_enabled && hwnd_ != nullptr) {
     HWND hwnd = static_cast<HWND>(hwnd_);
     POINT cursor_pos;
     if (GetCursorPos(&cursor_pos) && ScreenToClient(hwnd, &cursor_pos)) {
-      const ViewportRect vp = cached_viewport_;
-      if (cursor_pos.x >= vp.x && cursor_pos.x < vp.x + vp.width &&
-          cursor_pos.y >= vp.y && cursor_pos.y < vp.y + vp.height && vp.width > 0 && vp.height > 0) {
+      int gba_x = 0, gba_y = 0;
+      if (client_to_gba(cursor_pos.x, cursor_pos.y, gba_x, gba_y)) {
 
-        if (!mouse_has_prev_pos_) {
-          last_mouse_client_x_ = cursor_pos.x;
-          last_mouse_client_y_ = cursor_pos.y;
-          mouse_has_prev_pos_ = true;
-          accum_mouse_dx_ = 0.0f;
-          accum_mouse_dy_ = 0.0f;
-          mouse_step_cooldown_ = 0;
-          pending_mouse_dir_ = 0;
-        } else {
-          const int delta_x = cursor_pos.x - last_mouse_client_x_;
-          const int delta_y = cursor_pos.y - last_mouse_client_y_;
-          last_mouse_client_x_ = cursor_pos.x;
-          last_mouse_client_y_ = cursor_pos.y;
-
-          if (delta_x != 0 || delta_y != 0) {
-            // Convert viewport pixel delta to GBA screen coordinate space
-            const float gba_delta_x = (static_cast<float>(delta_x) * 240.0f) / static_cast<float>(vp.width);
-            const float gba_delta_y = (static_cast<float>(delta_y) * 160.0f) / static_cast<float>(vp.height);
-
-            accum_mouse_dx_ += gba_delta_x;
-            accum_mouse_dy_ += gba_delta_y;
-          }
-
-          // Step threshold matching GBA tile/letter cell spacing (~16 pixels)
-          constexpr float kStepThreshold = 16.0f;
-
-          if (mouse_step_cooldown_ <= 0) {
-            std::uint16_t dir_pulse = 0;
-
-            if (accum_mouse_dx_ >= kStepThreshold) {
-              dir_pulse = kKeyRight;
-              accum_mouse_dx_ -= kStepThreshold;
-            } else if (accum_mouse_dx_ <= -kStepThreshold) {
-              dir_pulse = kKeyLeft;
-              accum_mouse_dx_ += kStepThreshold;
-            } else if (accum_mouse_dy_ >= kStepThreshold) {
-              dir_pulse = kKeyDown;
-              accum_mouse_dy_ -= kStepThreshold;
-            } else if (accum_mouse_dy_ <= -kStepThreshold) {
-              dir_pulse = kKeyUp;
-              accum_mouse_dy_ += kStepThreshold;
-            }
-
-            if (dir_pulse != 0) {
-              hardware.keys_pressed |= dir_pulse;
-              // Mandatory 4-frame gap (release) between pulses to match GBA menu step rate exactly
-              mouse_step_cooldown_ = 4;
-            }
-          } else {
-            mouse_step_cooldown_--;
-          }
+        // Mouse move: if active, teleport game cursor to follow mouse
+        if (mouse_cursor_.is_active()) {
+          mouse_cursor_.handle_move(gba_x, gba_y);
         }
 
-        // Left Click = Select / Confirm (GBA A)
-        if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) {
-          hardware.keys_pressed |= kKeyA;
+        // Left Click edge detection: inject cursor teleport + A press
+        const bool left_down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        if (left_down && !mouse_left_was_down_) {
+          // Rising edge of left click
+          std::uint16_t keys = mouse_cursor_.handle_click(gba_x, gba_y);
+          hardware.keys_pressed |= keys;
         }
-        // Right Click = Cancel / Info (GBA B)
-        if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) {
+        mouse_left_was_down_ = left_down;
+
+        // Right Click edge detection: B button
+        const bool right_down = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+        if (right_down && !mouse_right_was_down_) {
           hardware.keys_pressed |= kKeyB;
         }
+        mouse_right_was_down_ = right_down;
+
       } else {
-        mouse_has_prev_pos_ = false;
+        // Mouse outside viewport — reset edge detection
+        mouse_left_was_down_ = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        mouse_right_was_down_ = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
       }
     }
+
+    // Consume any pending keys from MouseCursor (delayed A press after teleport)
+    hardware.keys_pressed |= mouse_cursor_.consume_pending_keys();
   }
+
 
   return is_open_;
 }
@@ -968,6 +950,8 @@ void Window::resize_client(int /*width*/, int /*height*/) {}
 std::string Window::consume_pending_rom() { return ""; }
 std::string Window::open_file_dialog(void* /*parent_hwnd*/) { return ""; }
 void Window::update_menu_checks() {}
+void Window::set_mgba_core(void* /*core*/) {}
+bool Window::client_to_gba(int /*client_x*/, int /*client_y*/, int& /*gba_x*/, int& /*gba_y*/) const { return false; }
 
 #endif
 

@@ -26,6 +26,7 @@ add_library(aw_runtime STATIC
   src/cpu_state.cpp
   src/hardware.cpp
   src/input_config.cpp
+  src/mouse_cursor.cpp
   src/memory.cpp
   src/ppu.cpp
   src/rom.cpp

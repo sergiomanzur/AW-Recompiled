@@ -3,6 +3,7 @@
 #include "aw/config_file.hpp"
 #include "aw/hardware.hpp"
 #include "aw/input_config.hpp"
+#include "aw/mouse_cursor.hpp"
 #include "aw/ppu.hpp"
 #include <string>
 #include <vector>
@@ -77,8 +78,16 @@ public:
 
   void set_pending_rom(const std::string& path) { pending_rom_path_ = path; }
 
+  // mGBA core pointer for direct memory access (mouse cursor support)
+  void set_mgba_core(void* core);
+  MouseCursor& mouse_cursor() { return mouse_cursor_; }
+
 private:
   void update_menu_checks();
+
+  // Convert window client coordinates to GBA screen coordinates (0-239, 0-159).
+  // Returns false if the position is outside the game viewport.
+  bool client_to_gba(int client_x, int client_y, int& gba_x, int& gba_y) const;
 
   void* hwnd_ = nullptr;
   void* hdc_ = nullptr;
@@ -93,14 +102,10 @@ private:
 
   InputMapping input_mapping_;
 
-  // PC Native Precise Mouse Navigation State (Discrete Single-Step Queue)
-  bool mouse_has_prev_pos_ = false;
-  int last_mouse_client_x_ = 0;
-  int last_mouse_client_y_ = 0;
-  float accum_mouse_dx_ = 0.0f;
-  float accum_mouse_dy_ = 0.0f;
-  int mouse_step_cooldown_ = 0;
-  std::uint16_t pending_mouse_dir_ = 0;
+  // PC Native Mouse Cursor Support (Direct Memory Access)
+  MouseCursor mouse_cursor_;
+  bool mouse_left_was_down_ = false;   // Edge detection for left click
+  bool mouse_right_was_down_ = false;  // Edge detection for right click
 
   // High-resolution & Scale2x filtering buffers
   std::vector<std::uint32_t> scale2x_buffer_;

@@ -106,3 +106,23 @@ void aw_mgba_destroy(struct mCore* core) {
         core->deinit(core);
     }
 }
+
+uint8_t aw_mgba_read8(struct mCore* core, uint32_t address) {
+    if (!core || !core->rawRead8) return 0;
+    return (uint8_t)core->rawRead8(core, address, -1);
+}
+
+void aw_mgba_write8(struct mCore* core, uint32_t address, uint8_t value) {
+    if (!core || !core->rawWrite8) return;
+    core->rawWrite8(core, address, -1, value);
+}
+
+uint16_t aw_mgba_read16(struct mCore* core, uint32_t address) {
+    if (!core || !core->rawRead16) return 0;
+    return (uint16_t)core->rawRead16(core, address, -1);
+}
+
+void aw_mgba_write16(struct mCore* core, uint32_t address, uint16_t value) {
+    if (!core || !core->rawWrite16) return;
+    core->rawWrite16(core, address, -1, value);
+}

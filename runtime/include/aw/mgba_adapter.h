@@ -24,6 +24,12 @@ unsigned aw_mgba_audio_sample_rate(const struct mCore* core);
 
 void aw_mgba_destroy(struct mCore* core);
 
+// Direct game memory access (for cursor position read/write)
+uint8_t aw_mgba_read8(struct mCore* core, uint32_t address);
+void aw_mgba_write8(struct mCore* core, uint32_t address, uint8_t value);
+uint16_t aw_mgba_read16(struct mCore* core, uint32_t address);
+void aw_mgba_write16(struct mCore* core, uint32_t address, uint16_t value);
+
 #ifdef __cplusplus
 }
 #endif
