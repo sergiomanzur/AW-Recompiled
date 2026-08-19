@@ -1,5 +1,6 @@
 #pragma once
 
+#include "aw/config_file.hpp"
 #include "aw/hardware.hpp"
 #include "aw/ppu.hpp"
 #include <string>
@@ -25,7 +26,7 @@ enum class InternalResolution {
 
 enum class VideoFilter {
   NearestNeighbor, // Sharp, crisp retro pixels
-  Bilinear,        // Smooth hardware anti-aliased interpolation (HALFTONE)
+  Bilinear,        // Smooth hardware anti-aliased interpolation
   Scale2x          // HD 2x pixel art smoothing filter
 };
 
@@ -59,7 +60,11 @@ public:
 
   void resize_client(int width, int height);
 
-  // Returns true if the user selected a new ROM from the File -> Open ROM menu
+  // Config.ini persistence
+  void load_config(const ConfigFile& config);
+  void save_config(ConfigFile& config) const;
+
+  // Returns true if the user selected a new ROM from File/Settings menu
   bool has_pending_rom() const { return !pending_rom_path_.empty(); }
   std::string consume_pending_rom();
 

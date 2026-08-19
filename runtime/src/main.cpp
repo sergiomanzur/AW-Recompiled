@@ -1,6 +1,7 @@
 #include "aw/arm_decode.hpp"
 #include "aw/audio.hpp"
 #include "aw/config.hpp"
+#include "aw/config_file.hpp"
 #include "aw/cpu_interpreter.hpp"
 #include "aw/cpu_state.hpp"
 #include "aw/generated_blocks.hpp"
@@ -21,6 +22,17 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <timeapi.h>
+#endif
 
 #include "aw/mgba_adapter.h"
 
@@ -79,9 +91,9 @@ Options parse_options(int argc, char** argv) {
     } else if (arg == "--play") {
       options.play_enabled = true;
     } else if (arg.rfind("--frames=", 0) == 0) {
-      options.max_frames = std::max(0, std::stoi(arg.substr(9)));
+      options.max_frames = (std::max)(0, std::stoi(arg.substr(9)));
     } else if (arg == "--frames" && i + 1 < argc) {
-      options.max_frames = std::max(0, std::stoi(argv[++i]));
+      options.max_frames = (std::max)(0, std::stoi(argv[++i]));
     } else {
       positional.push_back(arg);
     }
@@ -91,21 +103,40 @@ Options parse_options(int argc, char** argv) {
     throw std::runtime_error("usage: advance-wars-native [path-to-gba-rom] [--trace] [--play] [--frames N]");
   }
 
-  if (positional.empty()) {
-    if (std::filesystem::exists(AW_DEFAULT_ROM_PATH)) {
+  aw::ConfigFile config;
+  config.load("config.ini");
+
+  if (!positional.empty()) {
+    options.rom_path = positional.front();
+    config.set_string("Paths", "rom_path", options.rom_path.string());
+    config.save("config.ini");
+  } else {
+    std::string saved_rom = config.get_string("Paths", "rom_path", "");
+    if (!saved_rom.empty() && std::filesystem::exists(saved_rom)) {
+      options.rom_path = saved_rom;
+    } else if (std::filesystem::exists(AW_DEFAULT_ROM_PATH)) {
       options.rom_path = AW_DEFAULT_ROM_PATH;
+      config.set_string("Paths", "rom_path", options.rom_path.string());
+      config.save("config.ini");
     } else {
+#ifdef _WIN32
+      MessageBoxA(
+          nullptr,
+          "No Advance Wars ROM file path configured.\n\nPlease select your Advance Wars (USA) GBA ROM file to continue.",
+          "AW-Recompiled Startup",
+          MB_OK | MB_ICONINFORMATION);
+#endif
       const std::string selected_rom = aw::Window::open_file_dialog();
-      if (!selected_rom.empty()) {
+      if (!selected_rom.empty() && std::filesystem::exists(selected_rom)) {
         options.rom_path = selected_rom;
+        config.set_string("Paths", "rom_path", selected_rom);
+        config.save("config.ini");
       } else {
-        options.rom_path = AW_DEFAULT_ROM_PATH;
+        throw std::runtime_error("No valid Advance Wars ROM file selected. AW-Recompiled requires a ROM file to run.");
       }
     }
     options.pause_on_exit = true;
     options.is_double_click = true;
-  } else {
-    options.rom_path = positional.front();
   }
 
   return options;
@@ -119,6 +150,12 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
     aw::Window window(960, 640, "Advance Wars (Native Recomp)");
     aw::Audio audio;
 
+    // Load config.ini settings into window (Aspect Ratio, Internal Res, Video Filter)
+    aw::ConfigFile config;
+    if (config.load("config.ini")) {
+      window.load_config(config);
+    }
+
     std::vector<std::uint32_t> mgba_buffer(240 * 160, 0);
     struct mCore* core = aw_mgba_create(rom_path.string().c_str(), mgba_buffer.data(), 240);
     if (!core) {
@@ -129,201 +166,115 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
     std::cout << "Core audio sample rate: " << core_sample_rate << " Hz (audio backend "
               << (audio.is_active() ? "active" : "inactive") << ")\n";
 
-    // The core's sample rate can change at runtime (games raising SOUNDBIAS
-    // resolution switch from 32768 Hz to 65536 Hz). Pull a few frames' worth
-    // of samples per tick; no resampling is needed as long as the waveOut
-    // device follows the core's rate.
     std::vector<std::int16_t> audio_samples(4096 * 2);
     std::uint64_t total_audio_samples = 0;
     std::uint64_t frames_run = 0;
 
     using clock = std::chrono::steady_clock;
-    // The GBA runs at 16.777216 MHz with 280896 cycles per frame, i.e.
-    // 59.7275 FPS — NOT 60. This is only used as a fallback when the audio
-    // backend is inactive; otherwise the audio device clock paces the loop.
-    constexpr auto frame_duration = std::chrono::duration_cast<clock::duration>(
-        std::chrono::nanoseconds(280896 * std::int64_t(1000000000) / 16777216));
+    const double gba_fps = 16777216.0 / 280896.0; // ~59.7275 FPS
+    const std::chrono::nanoseconds frame_duration_ns(static_cast<std::int64_t>(1000000000.0 / gba_fps));
     auto next_frame_time = clock::now();
 
-    // Audio-master pacing: keep roughly this many stereo sample frames
-    // buffered (~31ms at 65536 Hz, ~62ms at 32768 Hz). The waveOut device
-    // consumes samples at exactly the core's sample rate, so waiting for the
-    // buffer to drain back to this level locks the game to the audio clock
-    // with no drift, no overruns and no underruns.
-    constexpr int kAudioTargetFrames = 2048;
-
     while (window.is_open()) {
+      if (window.has_pending_rom()) {
+        const std::string new_rom_path = window.consume_pending_rom();
+        std::cout << "Switching to new ROM: " << new_rom_path << std::endl;
+        aw_mgba_destroy(core);
+        rom_path = new_rom_path;
+        core = aw_mgba_create(rom_path.string().c_str(), mgba_buffer.data(), 240);
+        if (!core) {
+          throw std::runtime_error("aw_mgba_create failed for new ROM: " + rom_path.string());
+        }
+      }
+
+      hardware.keys_pressed = 0;
       if (!window.process_events(hardware)) {
         break;
       }
 
-      // Check if user selected a new ROM from the File -> Open ROM menu
-      if (window.has_pending_rom()) {
-        const std::string new_path = window.consume_pending_rom();
-        try {
-          const auto new_rom = aw::load_rom_file(new_path);
-          if (aw::is_expected_advance_wars_rev1(new_rom)) {
-            aw_mgba_destroy(core);
-            rom_path = new_path;
-            rom = new_rom;
-            core = aw_mgba_create(rom_path.string().c_str(), mgba_buffer.data(), 240);
-            if (!core) {
-              throw std::runtime_error("aw_mgba_create failed for new ROM: " + new_path);
-            }
-          }
-        } catch (const std::exception& e) {
-          std::cerr << "Failed to load pending ROM: " << e.what() << '\n';
-        }
-      }
-
       aw_mgba_run_frame(core, hardware.keys_pressed);
+      frames_run++;
 
-      // Convert the core's XBGR8 framebuffer to the BGRA layout StretchDIBits expects.
-      for (int y = 0; y < 160; ++y) {
-        for (int x = 0; x < 240; ++x) {
-          const std::uint32_t c = mgba_buffer[y * 240 + x];
-          const std::uint8_t r = (c >> 0) & 0xFF;
-          const std::uint8_t g = (c >> 8) & 0xFF;
-          const std::uint8_t b = (c >> 16) & 0xFF;
-          ppu.framebuffer[y * 240 + x] = 0xFF000000u | (r << 16) | (g << 8) | b;
-        }
-      }
-
-      // Follow the core's sample rate if the game changed it (SOUNDBIAS).
+      // Check for audio sample rate changes from core (e.g. SOUNDBIAS 32768 Hz <-> 65536 Hz)
       const unsigned current_rate = aw_mgba_audio_sample_rate(core);
-      if (current_rate > 0 && static_cast<int>(current_rate) != audio.sample_rate()) {
-        std::cout << "Audio sample rate changed: " << audio.sample_rate() << " -> " << current_rate << " Hz\n";
-        audio.set_sample_rate(static_cast<int>(current_rate));
+      if (current_rate != 0 && current_rate != audio.sample_rate()) {
+        audio.set_sample_rate(current_rate);
       }
 
-      // Drain the core's audio buffer into the waveOut backend.
-      const std::size_t samples_read = aw_mgba_read_audio(core, audio_samples.data(), 4096);
+      // Read audio samples from mGBA core
+      const std::size_t samples_read = aw_mgba_read_audio(core, audio_samples.data(), audio_samples.size() / 2);
       if (samples_read > 0) {
-        audio.push_samples(audio_samples.data(), static_cast<int>(samples_read));
+        audio.push_samples(audio_samples.data(), samples_read);
         total_audio_samples += samples_read;
       }
 
-      window.render(ppu);
-      ++frames_run;
-      if (max_frames > 0 && frames_run >= static_cast<std::uint64_t>(max_frames)) {
-        break;
-      }
+      // Update PPU framebuffer from mGBA video buffer
+      std::copy_n(mgba_buffer.data(), 240 * 160, ppu.framebuffer.begin());
 
+      // Render frame to window
+      window.render(ppu);
+
+      // Frame pacing: align pacing to audio queue depth when audio is active
       if (audio.is_active()) {
-        // Audio-master pacing: wait until the audio buffer drains back to the
-        // target level. If the buffer is below target we do not sleep at all,
-        // letting the next frame refill it immediately.
-        int guard_ms = 0;
-        while (audio.queued_frames() > kAudioTargetFrames && guard_ms++ < 50) {
+        constexpr std::size_t kAudioTargetFrames = 2048;
+        while (window.is_open() && audio.queued_frames() > kAudioTargetFrames) {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          hardware.keys_pressed = 0;
+          if (!window.process_events(hardware)) {
+            break;
+          }
         }
-        next_frame_time = clock::now();
       } else {
-        // Fallback: throttle to the GBA's real frame rate (59.7275 FPS).
-        next_frame_time += frame_duration;
+        next_frame_time += frame_duration_ns;
         const auto now = clock::now();
-        if (now < next_frame_time) {
-          std::this_thread::sleep_until(next_frame_time);
+        if (next_frame_time > now) {
+          std::this_thread::sleep_for(next_frame_time - now);
         } else {
-          // Running behind; reset the deadline to avoid a death spiral.
           next_frame_time = now;
         }
       }
+
+      if (max_frames > 0 && frames_run >= static_cast<std::uint64_t>(max_frames)) {
+        break;
+      }
     }
 
+    std::cout << "Ran " << frames_run << " frames; audio samples emitted: " << total_audio_samples << std::endl;
     aw_mgba_destroy(core);
-    std::cout << "Ran " << frames_run << " frames; audio samples emitted: " << total_audio_samples << '\n';
-  } catch (const std::exception& ex) {
-    std::ofstream err_out("run_error.log");
-    err_out << "run_game_loop error: " << ex.what() << std::endl;
-    std::cerr << "run_game_loop error: " << ex.what() << '\n';
+  } catch (const std::exception& e) {
+    std::cerr << "Error in run_game_loop: " << e.what() << std::endl;
   }
 }
-
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-
-LONG WINAPI unhandled_exception_handler(EXCEPTION_POINTERS* ep) {
-  std::ofstream crash_out("crash.log");
-  crash_out << "CRASH DETECTED! ExceptionCode: 0x" << std::hex << ep->ExceptionRecord->ExceptionCode
-            << " at address: 0x" << ep->ExceptionRecord->ExceptionAddress << std::endl;
-  std::cerr << "\nCRASH DETECTED! ExceptionCode: 0x" << std::hex << ep->ExceptionRecord->ExceptionCode
-            << " at address: 0x" << ep->ExceptionRecord->ExceptionAddress << std::endl;
-
-  void* stack[64];
-  const WORD frames = CaptureStackBackTrace(0, 64, stack, nullptr);
-  crash_out << "Stack frames (" << frames << "):" << std::endl;
-  for (WORD i = 0; i < frames; ++i) {
-    crash_out << "  [" << i << "] 0x" << std::hex << reinterpret_cast<std::uintptr_t>(stack[i]) << std::endl;
-    std::cerr << "  [" << i << "] 0x" << std::hex << reinterpret_cast<std::uintptr_t>(stack[i]) << std::endl;
-  }
-  return EXCEPTION_EXECUTE_HANDLER;
-}
-#endif
 
 }  // namespace
 
 int main(int argc, char** argv) {
 #ifdef _WIN32
-  SetUnhandledExceptionFilter(unhandled_exception_handler);
+  // High-precision multimedia timer (1 ms accuracy for smooth frame pacing)
+  timeBeginPeriod(1);
 #endif
-  std::cout << "Starting advance-wars-native...\n";
-  std::cout.flush();
+
+  int exit_code = 0;
   bool pause_on_exit = false;
 
   try {
-    const auto options = parse_options(argc, argv);
+    Options options = parse_options(argc, argv);
     pause_on_exit = options.pause_on_exit;
 
-    const auto rom = aw::load_rom_file(options.rom_path);
-    const auto header = aw::parse_header(rom.bytes);
-    const auto hash = aw::sha1_hex(rom.bytes);
+    aw::RomImage rom = aw::load_rom_file(options.rom_path);
 
-    if (!aw::is_expected_advance_wars_rev1(rom)) {
-      std::cerr << "unsupported ROM: expected Advance Wars USA Rev 1 SHA1 "
-                << "15053499D5B3F49128A941D7F2D84876F5424D0C\n";
-      std::cerr << "actual SHA1: " << hash << '\n';
-      return 1;
-    }
-
-    constexpr std::uint32_t reset_pc = 0x08000000;
-    const auto instruction = aw::read_le32(rom.bytes, 0);
-    const auto reset_branch = aw::decode_arm_branch(instruction, reset_pc);
-
-    std::cout << "Advance Wars native recomp milestone 1\n";
-    std::cout << "ROM: " << header.title << ' ' << header.game_code << header.maker_code
-              << " Rev " << static_cast<int>(header.version) << '\n';
-    std::cout << "SHA1: " << hash << '\n';
-    std::cout << "Reset branch: " << hex32(reset_pc) << " -> " << hex32(reset_branch.target) << '\n';
-
-    if (options.trace_enabled) {
-      auto state_ptr = std::make_unique<aw::CpuState>();
-      auto& state = *state_ptr;
-      state.trace_enabled = true;
-      aw::generated::block_080000C0(state);
-      for (int i = 0; i < 136; ++i) {
-        aw::generated::dispatch_one(state);
-      }
-
-      for (const auto& line : state.trace_lines) {
-        std::cout << line << '\n';
-      }
-      std::cout << "Stopped at unresolved target " << hex32(state.stop_target) << '\n';
-    } else {
+    if (options.play_enabled) {
       run_game_loop(options.rom_path, rom, options.max_frames);
     }
-
-    wait_before_close(pause_on_exit);
-  } catch (const std::exception& ex) {
-    std::ofstream err_out("run_error.log");
-    err_out << "Exception caught: " << ex.what() << std::endl;
-    std::cerr << ex.what() << '\n';
-    wait_before_close(pause_on_exit);
-    return 1;
+  } catch (const std::exception& e) {
+    std::cerr << "Fatal error: " << e.what() << std::endl;
+    exit_code = 1;
   }
 
-  return 0;
+#ifdef _WIN32
+  timeEndPeriod(1);
+#endif
+
+  wait_before_close(pause_on_exit);
+  return exit_code;
 }

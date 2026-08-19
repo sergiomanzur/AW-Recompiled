@@ -21,6 +21,7 @@ add_custom_command(
 add_library(aw_runtime STATIC
   src/arm_decode.cpp
   src/audio.cpp
+  src/config_file.cpp
   src/cpu_interpreter.cpp
   src/cpu_state.cpp
   src/hardware.cpp
@@ -33,7 +34,7 @@ add_library(aw_runtime STATIC
 )
 
 if (WIN32)
-  target_link_libraries(aw_runtime PUBLIC winmm mgba)
+  target_link_libraries(aw_runtime PUBLIC winmm xinput mgba)
 else()
   target_link_libraries(aw_runtime PUBLIC mgba)
 endif()

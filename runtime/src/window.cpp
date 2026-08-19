@@ -6,6 +6,8 @@
 #endif
 #include <windows.h>
 #include <commdlg.h>
+#include <xinput.h>
+#pragma comment(lib, "xinput.lib")
 #endif
 
 #include <algorithm>
@@ -61,23 +63,25 @@ ViewportRect calculate_viewport_rect(int client_width, int client_height, Aspect
 
 namespace {
 
-constexpr UINT IDM_FILE_OPEN       = 1001;
-constexpr UINT IDM_FILE_EXIT       = 1002;
-constexpr UINT IDM_ASPECT_3_2      = 2001;
-constexpr UINT IDM_ASPECT_4_3      = 2002;
-constexpr UINT IDM_ASPECT_16_9     = 2003;
-constexpr UINT IDM_ASPECT_21_9     = 2004;
-constexpr UINT IDM_ASPECT_21_10    = 2005;
-constexpr UINT IDM_ASPECT_STRETCH  = 2006;
-constexpr UINT IDM_RES_NATIVE      = 2101;
-constexpr UINT IDM_RES_720P        = 2102;
-constexpr UINT IDM_RES_1080P       = 2103;
-constexpr UINT IDM_RES_4K          = 2104;
-constexpr UINT IDM_FILTER_NEAREST  = 2201;
-constexpr UINT IDM_FILTER_BILINEAR = 2202;
-constexpr UINT IDM_FILTER_SCALE2X   = 2203;
-constexpr UINT IDM_HELP_CONTROLS   = 3001;
-constexpr UINT IDM_HELP_ABOUT      = 3002;
+constexpr UINT IDM_FILE_OPEN            = 1001;
+constexpr UINT IDM_FILE_EXIT            = 1002;
+constexpr UINT IDM_ASPECT_3_2           = 2001;
+constexpr UINT IDM_ASPECT_4_3           = 2002;
+constexpr UINT IDM_ASPECT_16_9          = 2003;
+constexpr UINT IDM_ASPECT_21_9          = 2004;
+constexpr UINT IDM_ASPECT_21_10         = 2005;
+constexpr UINT IDM_ASPECT_STRETCH       = 2006;
+constexpr UINT IDM_RES_NATIVE           = 2101;
+constexpr UINT IDM_RES_720P             = 2102;
+constexpr UINT IDM_RES_1080P            = 2103;
+constexpr UINT IDM_RES_4K               = 2104;
+constexpr UINT IDM_FILTER_NEAREST       = 2201;
+constexpr UINT IDM_FILTER_BILINEAR      = 2202;
+constexpr UINT IDM_FILTER_SCALE2X        = 2203;
+constexpr UINT IDM_SETTINGS_SELECT_ROM  = 3001;
+constexpr UINT IDM_SETTINGS_CONTROLS    = 3002;
+constexpr UINT IDM_HELP_CONTROLS        = 4001;
+constexpr UINT IDM_HELP_ABOUT           = 4002;
 
 void apply_scale2x(const std::uint32_t* src, std::uint32_t* dst, int w, int h) {
   for (int y = 0; y < h; ++y) {
@@ -163,10 +167,13 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
     }
     case WM_COMMAND: {
       const WORD id = LOWORD(wparam);
-      if (id == IDM_FILE_OPEN) {
+      if (id == IDM_FILE_OPEN || id == IDM_SETTINGS_SELECT_ROM) {
         std::string rom_path = Window::open_file_dialog(hwnd);
         if (!rom_path.empty() && win != nullptr) {
           win->set_pending_rom(rom_path);
+          ConfigFile config;
+          config.load("config.ini");
+          win->save_config(config);
         }
       } else if (id == IDM_FILE_EXIT) {
         PostQuitMessage(0);
@@ -180,6 +187,9 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
             case IDM_ASPECT_21_10:   win->set_aspect_ratio(AspectRatio::Ratio_21_10); break;
             case IDM_ASPECT_STRETCH: win->set_aspect_ratio(AspectRatio::Stretch); break;
           }
+          ConfigFile config;
+          config.load("config.ini");
+          win->save_config(config);
         }
       } else if (id >= IDM_RES_NATIVE && id <= IDM_RES_4K) {
         if (win != nullptr) {
@@ -189,6 +199,9 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
             case IDM_RES_1080P:  win->set_internal_resolution(InternalResolution::Res_1080p); break;
             case IDM_RES_4K:     win->set_internal_resolution(InternalResolution::Res_4K); break;
           }
+          ConfigFile config;
+          config.load("config.ini");
+          win->save_config(config);
         }
       } else if (id >= IDM_FILTER_NEAREST && id <= IDM_FILTER_SCALE2X) {
         if (win != nullptr) {
@@ -197,24 +210,37 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
             case IDM_FILTER_BILINEAR: win->set_video_filter(VideoFilter::Bilinear); break;
             case IDM_FILTER_SCALE2X:   win->set_video_filter(VideoFilter::Scale2x); break;
           }
+          ConfigFile config;
+          config.load("config.ini");
+          win->save_config(config);
         }
-      } else if (id == IDM_HELP_CONTROLS) {
+      } else if (id == IDM_SETTINGS_CONTROLS || id == IDM_HELP_CONTROLS) {
         MessageBoxA(hwnd,
-          "Advance Wars (Native Recomp) Controls:\n\n"
-          "D-Pad:  Arrow Keys / W A S D\n"
-          "A Button:  Z / J\n"
-          "B Button:  X / K\n"
-          "Start:  Enter\n"
-          "Select:  Backspace / Shift\n"
-          "L Shoulder:  Q\n"
-          "R Shoulder:  E\n",
-          "Controls - AW-Recompiled",
+          "AW-Recompiled Controls & Controller Support:\n\n"
+          "⌨️ Keyboard Mapping:\n"
+          "  D-Pad:  Arrow Keys / W A S D\n"
+          "  A Button:  Z / J\n"
+          "  B Button:  X / K\n"
+          "  Start:  Enter\n"
+          "  Select:  Backspace / Shift\n"
+          "  L Shoulder:  Q\n"
+          "  R Shoulder:  E\n\n"
+          "🎮 XInput / USB Gamepad Mapping:\n"
+          "  D-Pad / Left Stick: Move Cursor / Map\n"
+          "  A / X Buttons: Confirm / Select (GBA A)\n"
+          "  B / Y Buttons: Cancel / Info (GBA B)\n"
+          "  Start / Menu: Pause Menu (GBA Start)\n"
+          "  Back / View: Status / Map View (GBA Select)\n"
+          "  LB / LT: Fast Move / Page Left (GBA L)\n"
+          "  RB / RT: Fast Move / Page Right (GBA R)\n\n"
+          "All preferences and keybindings are saved to config.ini.",
+          "Controls & Input Settings",
           MB_OK | MB_ICONINFORMATION);
       } else if (id == IDM_HELP_ABOUT) {
         MessageBoxA(hwnd,
           "AW-Recompiled v0.1 Alpha\n\n"
           "A native C++ static recompilation engine for Advance Wars (GBA).\n"
-          "Features native ARM translation, GDI software rendering, and 16-bit PCM stereo audio.\n",
+          "Features native ARM translation, XInput USB controller support, GDI software rendering, and 16-bit PCM audio.\n",
           "About AW-Recompiled",
           MB_OK | MB_ICONINFORMATION);
       }
@@ -246,42 +272,56 @@ Window::Window(int width, int height, const char* title)
 
   RegisterClassExA(&wc);
 
-  // Build Win32 Menu Bar
+  // Consolidated Win32 Menu Bar
   HMENU hMenuBar = CreateMenu();
   HMENU hFileMenu = CreatePopupMenu();
-  HMENU hAspectMenu = CreatePopupMenu();
-  HMENU hResMenu = CreatePopupMenu();
-  HMENU hFilterMenu = CreatePopupMenu();
+  HMENU hDisplayMenu = CreatePopupMenu();
+  HMENU hAspectSubMenu = CreatePopupMenu();
+  HMENU hResSubMenu = CreatePopupMenu();
+  HMENU hFilterSubMenu = CreatePopupMenu();
+  HMENU hSettingsMenu = CreatePopupMenu();
   HMENU hHelpMenu = CreatePopupMenu();
 
+  // File Menu
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_OPEN, "&Open ROM...\tCtrl+O");
   AppendMenuA(hFileMenu, MF_SEPARATOR, 0, nullptr);
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_EXIT, "E&xit");
 
-  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_3_2, "&3:2 Window Mode (960x640)");
-  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_4_3, "&4:3 Window Mode (960x720)");
-  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_16_9, "1&6:9 Window Mode (1152x648)");
-  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_21_9, "&21:9 Window Mode (1260x540)");
-  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_21_10, "21:10 Window Mode (1134x540)");
-  AppendMenuA(hAspectMenu, MF_SEPARATOR, 0, nullptr);
-  AppendMenuA(hAspectMenu, MF_STRING, IDM_ASPECT_STRETCH, "&Stretch to Window");
+  // Display Submenus
+  AppendMenuA(hAspectSubMenu, MF_STRING, IDM_ASPECT_3_2, "&3:2 Window Mode (960x640)");
+  AppendMenuA(hAspectSubMenu, MF_STRING, IDM_ASPECT_4_3, "&4:3 Window Mode (960x720)");
+  AppendMenuA(hAspectSubMenu, MF_STRING, IDM_ASPECT_16_9, "1&6:9 Window Mode (1152x648)");
+  AppendMenuA(hAspectSubMenu, MF_STRING, IDM_ASPECT_21_9, "&21:9 Window Mode (1260x540)");
+  AppendMenuA(hAspectSubMenu, MF_STRING, IDM_ASPECT_21_10, "21:10 Window Mode (1134x540)");
+  AppendMenuA(hAspectSubMenu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuA(hAspectSubMenu, MF_STRING, IDM_ASPECT_STRETCH, "&Stretch to Window");
 
-  AppendMenuA(hResMenu, MF_STRING, IDM_RES_NATIVE, "&Native (240x160)");
-  AppendMenuA(hResMenu, MF_STRING, IDM_RES_720P,   "&720p (1280x720)");
-  AppendMenuA(hResMenu, MF_STRING, IDM_RES_1080P,  "1&080p (1920x1080)");
-  AppendMenuA(hResMenu, MF_STRING, IDM_RES_4K,     "&4K (3840x2160)");
+  AppendMenuA(hResSubMenu, MF_STRING, IDM_RES_NATIVE, "&Native (240x160)");
+  AppendMenuA(hResSubMenu, MF_STRING, IDM_RES_720P,   "&720p (1280x720)");
+  AppendMenuA(hResSubMenu, MF_STRING, IDM_RES_1080P,  "1&080p (1920x1080)");
+  AppendMenuA(hResSubMenu, MF_STRING, IDM_RES_4K,     "&4K (3840x2160)");
 
-  AppendMenuA(hFilterMenu, MF_STRING, IDM_FILTER_NEAREST,  "&Nearest Neighbor (Crisp Pixels)");
-  AppendMenuA(hFilterMenu, MF_STRING, IDM_FILTER_BILINEAR, "&Bilinear Smooth (Anti-Aliased)");
-  AppendMenuA(hFilterMenu, MF_STRING, IDM_FILTER_SCALE2X,   "&Scale2x HD Filter");
+  AppendMenuA(hFilterSubMenu, MF_STRING, IDM_FILTER_NEAREST,  "&Nearest Neighbor (Crisp Pixels)");
+  AppendMenuA(hFilterSubMenu, MF_STRING, IDM_FILTER_BILINEAR, "&Bilinear Smooth (Anti-Aliased)");
+  AppendMenuA(hFilterSubMenu, MF_STRING, IDM_FILTER_SCALE2X,   "&Scale2x HD Filter");
 
-  AppendMenuA(hHelpMenu, MF_STRING, IDM_HELP_CONTROLS, "&Controls...");
+  // Consolidated Display Menu
+  AppendMenuA(hDisplayMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hAspectSubMenu), "&Aspect Ratio");
+  AppendMenuA(hDisplayMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hResSubMenu), "&Internal Resolution");
+  AppendMenuA(hDisplayMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hFilterSubMenu), "&Video Filter");
+
+  // Settings Menu
+  AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_SELECT_ROM, "Select &GBA ROM Path...");
+  AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_CONTROLS, "&Configure Controls & Gamepad...");
+
+  // Help Menu
+  AppendMenuA(hHelpMenu, MF_STRING, IDM_HELP_CONTROLS, "&Controls Info...");
   AppendMenuA(hHelpMenu, MF_STRING, IDM_HELP_ABOUT, "&About AW-Recompiled...");
 
+  // Main Bar
   AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hFileMenu), "&File");
-  AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hAspectMenu), "&Aspect Ratio");
-  AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hResMenu), "&Internal Resolution");
-  AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hFilterMenu), "&Video Filter");
+  AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hDisplayMenu), "&Display");
+  AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hSettingsMenu), "&Settings");
   AppendMenuA(hMenuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(hHelpMenu), "&Help");
 
   menu_ = static_cast<void*>(hMenuBar);
@@ -374,6 +414,26 @@ void Window::set_video_filter(VideoFilter filter) {
   }
 }
 
+void Window::load_config(const ConfigFile& config) {
+  const int aspect = config.get_int("Display", "aspect_ratio", 0);
+  const int res = config.get_int("Display", "internal_resolution", 0);
+  const int filter = config.get_int("Display", "video_filter", 1);
+
+  set_aspect_ratio(static_cast<AspectRatio>(std::clamp(aspect, 0, 5)));
+  set_internal_resolution(static_cast<InternalResolution>(std::clamp(res, 0, 3)));
+  set_video_filter(static_cast<VideoFilter>(std::clamp(filter, 0, 2)));
+}
+
+void Window::save_config(ConfigFile& config) const {
+  config.set_int("Display", "aspect_ratio", static_cast<int>(aspect_ratio_));
+  config.set_int("Display", "internal_resolution", static_cast<int>(internal_resolution_));
+  config.set_int("Display", "video_filter", static_cast<int>(video_filter_));
+  if (!pending_rom_path_.empty()) {
+    config.set_string("Paths", "rom_path", pending_rom_path_);
+  }
+  config.save("config.ini");
+}
+
 void Window::resize_client(int width, int height) {
   if (hwnd_ == nullptr) return;
   HWND hwnd = static_cast<HWND>(hwnd_);
@@ -460,6 +520,32 @@ bool Window::process_events(Hardware& hardware) {
 
     TranslateMessage(&msg);
     DispatchMessageA(&msg);
+  }
+
+  // Poll XInput USB Controllers
+  XINPUT_STATE xstate;
+  std::memset(&xstate, 0, sizeof(XINPUT_STATE));
+  if (XInputGetState(0, &xstate) == ERROR_SUCCESS) {
+    const WORD btns = xstate.Gamepad.wButtons;
+
+    if (btns & XINPUT_GAMEPAD_DPAD_UP) hardware.keys_pressed |= kKeyUp;
+    if (btns & XINPUT_GAMEPAD_DPAD_DOWN) hardware.keys_pressed |= kKeyDown;
+    if (btns & XINPUT_GAMEPAD_DPAD_LEFT) hardware.keys_pressed |= kKeyLeft;
+    if (btns & XINPUT_GAMEPAD_DPAD_RIGHT) hardware.keys_pressed |= kKeyRight;
+
+    // Analog Thumbstick to D-Pad mapping with deadzone
+    constexpr SHORT kDeadZone = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
+    if (xstate.Gamepad.sThumbLY > kDeadZone) hardware.keys_pressed |= kKeyUp;
+    if (xstate.Gamepad.sThumbLY < -kDeadZone) hardware.keys_pressed |= kKeyDown;
+    if (xstate.Gamepad.sThumbLX < -kDeadZone) hardware.keys_pressed |= kKeyLeft;
+    if (xstate.Gamepad.sThumbLX > kDeadZone) hardware.keys_pressed |= kKeyRight;
+
+    if ((btns & XINPUT_GAMEPAD_A) || (btns & XINPUT_GAMEPAD_X)) hardware.keys_pressed |= kKeyA;
+    if ((btns & XINPUT_GAMEPAD_B) || (btns & XINPUT_GAMEPAD_Y)) hardware.keys_pressed |= kKeyB;
+    if (btns & XINPUT_GAMEPAD_START) hardware.keys_pressed |= kKeyStart;
+    if (btns & XINPUT_GAMEPAD_BACK) hardware.keys_pressed |= kKeySelect;
+    if ((btns & XINPUT_GAMEPAD_LEFT_SHOULDER) || (xstate.Gamepad.bLeftTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD)) hardware.keys_pressed |= kKeyL;
+    if ((btns & XINPUT_GAMEPAD_RIGHT_SHOULDER) || (xstate.Gamepad.bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD)) hardware.keys_pressed |= kKeyR;
   }
 
   return is_open_;
@@ -587,6 +673,8 @@ void Window::render(const Ppu& /*ppu*/) {}
 void Window::set_aspect_ratio(AspectRatio ratio) { aspect_ratio_ = ratio; }
 void Window::set_internal_resolution(InternalResolution res) { internal_resolution_ = res; }
 void Window::set_video_filter(VideoFilter filter) { video_filter_ = filter; }
+void Window::load_config(const ConfigFile& /*config*/) {}
+void Window::save_config(ConfigFile& /*config*/) const {}
 void Window::resize_client(int /*width*/, int /*height*/) {}
 std::string Window::consume_pending_rom() { return ""; }
 std::string Window::open_file_dialog(void* /*parent_hwnd*/) { return ""; }
