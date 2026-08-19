@@ -28,7 +28,7 @@ const char* gba_button_name(GbaButton btn) {
 
 void InputMapping::reset_to_defaults() {
   controller_index = 0;
-  mouse_enabled = true;
+  mouse_enabled = false;
 
   // Defaults: Keyboard
   bindings[Gba_A].key_vk      = 'Z';
@@ -59,7 +59,7 @@ void InputMapping::load_from_config(const ConfigFile& config) {
   reset_to_defaults();
 
   controller_index = config.get_int("Input", "controller_index", 0);
-  mouse_enabled = config.get_int("Input", "mouse_enabled", 1) != 0;
+  mouse_enabled = config.get_int("Input", "mouse_enabled", 0) != 0;
 
   static const char* keys[Gba_Count] = {
     "key_a", "key_b", "key_select", "key_start",

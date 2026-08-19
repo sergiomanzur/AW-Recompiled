@@ -795,21 +795,21 @@ bool Window::process_events(Hardware& hardware) {
           // Direct Memory Mode: teleport game cursor to follow mouse
           mouse_cursor_.handle_move(gba_x, gba_y);
         } else {
-          // Absolute Target Steering:
-          // Detect if mouse pointer is over the Name Entry / Menu Keyboard Box or standard GBA 16x16 map grid
-          int target_x = 0;
-          int target_y = 0;
+          // 1:1 Precise Screen-to-Grid Target Calculation
+          // The Name Entry Keyboard box occupies X=76..236, Y=56..142 on the 240x160 GBA screen.
+          // Col = 15 columns (10 px per col) starting at X=80
+          // Row = 6 rows (12 px per row) starting at Y=58
+          int target_x = std::clamp((gba_x - 80) / 10, 0, 14);
+          int target_y = std::clamp((gba_y - 58) / 12, 0, 5);
 
-          if (gba_x >= 76 && gba_x <= 236 && gba_y >= 64 && gba_y <= 138) {
-            // Name Entry Screen Keyboard Layout:
-            // 15 letter columns spaced ~10.4 pixels apart starting at X = 78
-            // 6 rows (A..O, P..., a..o, p..-, 1..0, BACK/OK) spaced ~12 pixels apart starting at Y = 66
-            target_x = std::clamp((gba_x - 78) * 15 / 156, 0, 14);
-            target_y = std::clamp((gba_y - 66) / 12, 0, 5);
-          } else {
-            // Standard Game Map / Main Menu 16x16 Tile Grid (15 columns x 10 rows)
-            target_x = std::clamp(gba_x / 16, 0, 14);
-            target_y = std::clamp(gba_y / 16, 0, 9);
+          // Real-Time Debug Logging (printed when target changes)
+          static int last_dbg_x = -1, last_dbg_y = -1;
+          if (target_x != last_dbg_x || target_y != last_dbg_y) {
+            std::cout << "[Mouse Debug] GBA Pos: (" << gba_x << ", " << gba_y
+                      << ") -> Target Grid: (Col " << target_x << ", Row " << target_y
+                      << ") | Cur Grid: (" << cur_grid_x_ << ", " << cur_grid_y_ << ")" << std::endl;
+            last_dbg_x = target_x;
+            last_dbg_y = target_y;
           }
 
           if (!mouse_grid_init_) {
