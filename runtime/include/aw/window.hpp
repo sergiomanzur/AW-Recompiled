@@ -93,10 +93,13 @@ private:
 
   InputMapping input_mapping_;
 
-  // PC Native Mouse Cursor Navigation State (Target GBA Grid Coordinates & Repeat Counter)
-  int target_tile_x_ = -1;
-  int target_tile_y_ = -1;
-  int move_cooldown_ = 0;
+  // PC Native Mouse Navigation Accumulator State
+  bool mouse_has_prev_pos_ = false;
+  int last_mouse_client_x_ = 0;
+  int last_mouse_client_y_ = 0;
+  float accum_mouse_dx_ = 0.0f;
+  float accum_mouse_dy_ = 0.0f;
+  int mouse_idle_frames_ = 0;
 
   // High-resolution & Scale2x filtering buffers
   std::vector<std::uint32_t> scale2x_buffer_;

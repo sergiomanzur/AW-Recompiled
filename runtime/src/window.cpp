@@ -760,7 +760,7 @@ bool Window::process_events(Hardware& hardware) {
     }
   }
 
-  // 3. PC Native Mouse Navigation & Direct Hand Cursor Tracking
+  // 3. PC Native Precise Mouse Cursor Navigation
   if (input_mapping_.mouse_enabled && hwnd_ != nullptr) {
     HWND hwnd = static_cast<HWND>(hwnd_);
     POINT cursor_pos;
@@ -769,35 +769,52 @@ bool Window::process_events(Hardware& hardware) {
       if (cursor_pos.x >= vp.x && cursor_pos.x < vp.x + vp.width &&
           cursor_pos.y >= vp.y && cursor_pos.y < vp.y + vp.height && vp.width > 0 && vp.height > 0) {
 
-        // Normalize mouse cursor to GBA screen pixels (240 x 160)
-        const float norm_x = static_cast<float>(cursor_pos.x - vp.x) / static_cast<float>(vp.width);
-        const float norm_y = static_cast<float>(cursor_pos.y - vp.y) / static_cast<float>(vp.height);
-
-        const int gba_x = std::clamp(static_cast<int>(norm_x * 240.0f), 0, 239);
-        const int gba_y = std::clamp(static_cast<int>(norm_y * 160.0f), 0, 159);
-
-        // Convert GBA screen pixels to 16x16 grid cell targets (15 columns x 10 rows)
-        target_tile_x_ = gba_x / 16;
-        target_tile_y_ = gba_y / 16;
-
-        // Drive D-Pad pulses towards target hovered tile on a 2-frame cadence for rapid smooth navigation
-        if (move_cooldown_ <= 0) {
-          bool moved = false;
-          // In menus and name entry screens (like selecting letters 'S'), row navigation happens first
-          if (target_tile_x_ > 0) {
-            hardware.keys_pressed |= kKeyRight;
-            target_tile_x_--;
-            moved = true;
-          } else if (target_tile_y_ > 0) {
-            hardware.keys_pressed |= kKeyDown;
-            target_tile_y_--;
-            moved = true;
-          }
-          if (moved) {
-            move_cooldown_ = 2; // 2 frames repeat cadence
-          }
+        if (!mouse_has_prev_pos_) {
+          last_mouse_client_x_ = cursor_pos.x;
+          last_mouse_client_y_ = cursor_pos.y;
+          mouse_has_prev_pos_ = true;
+          accum_mouse_dx_ = 0.0f;
+          accum_mouse_dy_ = 0.0f;
+          mouse_idle_frames_ = 0;
         } else {
-          move_cooldown_--;
+          const int delta_x = cursor_pos.x - last_mouse_client_x_;
+          const int delta_y = cursor_pos.y - last_mouse_client_y_;
+          last_mouse_client_x_ = cursor_pos.x;
+          last_mouse_client_y_ = cursor_pos.y;
+
+          if (delta_x != 0 || delta_y != 0) {
+            // Convert viewport pixel delta to GBA screen coordinate space
+            const float gba_delta_x = (static_cast<float>(delta_x) * 240.0f) / static_cast<float>(vp.width);
+            const float gba_delta_y = (static_cast<float>(delta_y) * 160.0f) / static_cast<float>(vp.height);
+
+            accum_mouse_dx_ += gba_delta_x;
+            accum_mouse_dy_ += gba_delta_y;
+            mouse_idle_frames_ = 0;
+          } else {
+            mouse_idle_frames_++;
+            if (mouse_idle_frames_ > 5) {
+              accum_mouse_dx_ = 0.0f;
+              accum_mouse_dy_ = 0.0f;
+            }
+          }
+
+          constexpr float kStepThreshold = 12.0f; // 12 GBA pixels per cursor step
+
+          if (accum_mouse_dx_ >= kStepThreshold) {
+            hardware.keys_pressed |= kKeyRight;
+            accum_mouse_dx_ -= kStepThreshold;
+          } else if (accum_mouse_dx_ <= -kStepThreshold) {
+            hardware.keys_pressed |= kKeyLeft;
+            accum_mouse_dx_ += kStepThreshold;
+          }
+
+          if (accum_mouse_dy_ >= kStepThreshold) {
+            hardware.keys_pressed |= kKeyDown;
+            accum_mouse_dy_ -= kStepThreshold;
+          } else if (accum_mouse_dy_ <= -kStepThreshold) {
+            hardware.keys_pressed |= kKeyUp;
+            accum_mouse_dy_ += kStepThreshold;
+          }
         }
 
         // Left Click = Select / Confirm (GBA A)
@@ -808,6 +825,8 @@ bool Window::process_events(Hardware& hardware) {
         if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) {
           hardware.keys_pressed |= kKeyB;
         }
+      } else {
+        mouse_has_prev_pos_ = false;
       }
     }
   }
