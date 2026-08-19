@@ -777,7 +777,7 @@ bool Window::process_events(Hardware& hardware) {
     }
   }
 
-  // 3. PC Native Mouse Cursor Support & Navigation
+  // 3. PC Native Mouse & Touchscreen Navigation
   if (input_mapping_.mouse_enabled && hwnd_ != nullptr) {
     HWND hwnd = static_cast<HWND>(hwnd_);
     POINT cursor_pos;
@@ -789,14 +789,13 @@ bool Window::process_events(Hardware& hardware) {
           // Direct Memory Mode: teleport game cursor to follow mouse
           mouse_cursor_.handle_move(gba_x, gba_y);
         } else {
-          // D-Pad Pulse Translation Mode: convert mouse movement to D-pad pulses
+          // Responsive 1:1 Direct Mouse Displacement Engine
           if (!mouse_has_prev_pos_) {
             last_mouse_gba_x_ = gba_x;
             last_mouse_gba_y_ = gba_y;
             mouse_has_prev_pos_ = true;
             accum_mouse_dx_ = 0.0f;
             accum_mouse_dy_ = 0.0f;
-            mouse_step_cooldown_ = 0;
           } else {
             const int delta_x = gba_x - last_mouse_gba_x_;
             const int delta_y = gba_y - last_mouse_gba_y_;
@@ -806,36 +805,38 @@ bool Window::process_events(Hardware& hardware) {
             if (delta_x != 0 || delta_y != 0) {
               accum_mouse_dx_ += static_cast<float>(delta_x);
               accum_mouse_dy_ += static_cast<float>(delta_y);
+              mouse_idle_frames_ = 0;
+            } else {
+              mouse_idle_frames_++;
+              // Decay accumulators when mouse stops moving
+              if (mouse_idle_frames_ > 2) {
+                accum_mouse_dx_ *= 0.5f;
+                accum_mouse_dy_ *= 0.5f;
+              }
             }
 
-            constexpr float kStepThreshold = 12.0f;
-            if (mouse_step_cooldown_ <= 0) {
-              std::uint16_t dir_pulse = 0;
-              if (accum_mouse_dx_ >= kStepThreshold) {
-                dir_pulse = kKeyRight;
-                accum_mouse_dx_ -= kStepThreshold;
-              } else if (accum_mouse_dx_ <= -kStepThreshold) {
-                dir_pulse = kKeyLeft;
-                accum_mouse_dx_ += kStepThreshold;
-              } else if (accum_mouse_dy_ >= kStepThreshold) {
-                dir_pulse = kKeyDown;
-                accum_mouse_dy_ -= kStepThreshold;
-              } else if (accum_mouse_dy_ <= -kStepThreshold) {
-                dir_pulse = kKeyUp;
-                accum_mouse_dy_ += kStepThreshold;
-              }
+            // Cell displacement threshold (8 GBA canvas pixels = 1 menu/tile step)
+            constexpr float kStepThreshold = 8.0f;
 
-              if (dir_pulse != 0) {
-                hardware.keys_pressed |= dir_pulse;
-                mouse_step_cooldown_ = 4;
-              }
-            } else {
-              mouse_step_cooldown_--;
+            if (accum_mouse_dx_ >= kStepThreshold) {
+              hardware.keys_pressed |= kKeyRight;
+              accum_mouse_dx_ -= kStepThreshold;
+            } else if (accum_mouse_dx_ <= -kStepThreshold) {
+              hardware.keys_pressed |= kKeyLeft;
+              accum_mouse_dx_ += kStepThreshold;
+            }
+
+            if (accum_mouse_dy_ >= kStepThreshold) {
+              hardware.keys_pressed |= kKeyDown;
+              accum_mouse_dy_ -= kStepThreshold;
+            } else if (accum_mouse_dy_ <= -kStepThreshold) {
+              hardware.keys_pressed |= kKeyUp;
+              accum_mouse_dy_ += kStepThreshold;
             }
           }
         }
 
-        // Left Click edge detection: inject A press (or cursor teleport + A)
+        // Left Click edge detection: inject A press
         const bool left_down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
         if (left_down && !mouse_left_was_down_) {
           std::uint16_t keys = mouse_cursor_.handle_click(gba_x, gba_y);
@@ -851,14 +852,12 @@ bool Window::process_events(Hardware& hardware) {
         mouse_right_was_down_ = right_down;
 
       } else {
-        // Mouse outside viewport
         mouse_has_prev_pos_ = false;
         mouse_left_was_down_ = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
         mouse_right_was_down_ = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
       }
     }
 
-    // Consume any pending keys from MouseCursor
     hardware.keys_pressed |= mouse_cursor_.consume_pending_keys();
   }
 
