@@ -16,11 +16,102 @@ void MouseCursor::set_core(mCore* core) {
 void MouseCursor::reset() {
   addrs_ = {};
   scan_phase_ = -1;
+  has_snapshot_ = false;
+  scan_count_x_ = 0;
+  scan_count_y_ = 0;
   snapshot_before_.clear();
   x_candidates_.clear();
   y_candidates_.clear();
   pending_a_frames_ = 0;
   pending_keys_ = 0;
+}
+
+void MouseCursor::update_passive_scan(std::uint16_t keys_pressed) {
+  if (addrs_.validated || !core_) return;
+
+  const bool right = (keys_pressed & kKeyRight) != 0;
+  const bool left  = (keys_pressed & kKeyLeft) != 0;
+  const bool down  = (keys_pressed & kKeyDown) != 0;
+  const bool up    = (keys_pressed & kKeyUp) != 0;
+
+  if (!right && !left && !down && !up) {
+    // Refresh idle EWRAM snapshot
+    snapshot_ewram(snapshot_before_);
+    has_snapshot_ = true;
+    return;
+  }
+
+  if (!has_snapshot_) return;
+
+  // Take snapshot after D-pad movement
+  std::vector<std::uint8_t> snapshot_after;
+  snapshot_ewram(snapshot_after);
+
+  if (right || left) {
+    const int expected_diff = right ? 1 : -1;
+    std::vector<std::uint32_t> new_cands;
+    for (std::uint32_t i = 0; i < kScanSize; ++i) {
+      const int diff = static_cast<int>(snapshot_after[i]) - static_cast<int>(snapshot_before_[i]);
+      if (diff == expected_diff) {
+        const std::uint32_t addr = kScanBase + i;
+        if (x_candidates_.empty() && scan_count_x_ == 0) {
+          new_cands.push_back(addr);
+        } else {
+          if (std::find(x_candidates_.begin(), x_candidates_.end(), addr) != x_candidates_.end()) {
+            new_cands.push_back(addr);
+          }
+        }
+      }
+    }
+    x_candidates_ = std::move(new_cands);
+    scan_count_x_++;
+    std::cout << "[MouseCursor] Passive X candidates: " << x_candidates_.size() << std::endl;
+  }
+
+  if (down || up) {
+    const int expected_diff = down ? 1 : -1;
+    std::vector<std::uint32_t> new_cands;
+    for (std::uint32_t i = 0; i < kScanSize; ++i) {
+      const int diff = static_cast<int>(snapshot_after[i]) - static_cast<int>(snapshot_before_[i]);
+      if (diff == expected_diff) {
+        const std::uint32_t addr = kScanBase + i;
+        if (y_candidates_.empty() && scan_count_y_ == 0) {
+          new_cands.push_back(addr);
+        } else {
+          if (std::find(y_candidates_.begin(), y_candidates_.end(), addr) != y_candidates_.end()) {
+            new_cands.push_back(addr);
+          }
+        }
+      }
+    }
+    y_candidates_ = std::move(new_cands);
+    scan_count_y_++;
+    std::cout << "[MouseCursor] Passive Y candidates: " << y_candidates_.size() << std::endl;
+  }
+
+  // Validate when candidates have narrowed down
+  if (!x_candidates_.empty() && !y_candidates_.empty() && scan_count_x_ >= 1 && scan_count_y_ >= 1) {
+    for (std::uint32_t x_addr : x_candidates_) {
+      const std::uint8_t vx = aw_mgba_read8(core_, x_addr);
+      if (vx <= 30) {
+        for (std::uint32_t y_addr : y_candidates_) {
+          const std::uint8_t vy = aw_mgba_read8(core_, y_addr);
+          if (vy <= 20) {
+            addrs_.cursor_x_addr = x_addr;
+            addrs_.cursor_y_addr = y_addr;
+            addrs_.validated = true;
+            std::cout << "[MouseCursor] Passive Scan SUCCESS! Cursor X @ 0x" << std::hex << x_addr
+                      << " (val=" << std::dec << (int)vx << "), Y @ 0x" << std::hex << y_addr
+                      << " (val=" << std::dec << (int)vy << ")" << std::endl;
+            break;
+          }
+        }
+        if (addrs_.validated) break;
+      }
+    }
+  }
+
+  snapshot_before_ = std::move(snapshot_after);
 }
 
 void MouseCursor::snapshot_ewram(std::vector<std::uint8_t>& out) {

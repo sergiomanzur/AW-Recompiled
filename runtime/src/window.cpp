@@ -777,7 +777,13 @@ bool Window::process_events(Hardware& hardware) {
     }
   }
 
-  // 3. PC Native Mouse & Touchscreen Navigation
+  // Update tracked grid position when manual D-pad keys are pressed
+  if (hardware.keys_pressed & kKeyRight) cur_grid_x_ = (std::min)(14, cur_grid_x_ + 1);
+  if (hardware.keys_pressed & kKeyLeft)  cur_grid_x_ = (std::max)(0, cur_grid_x_ - 1);
+  if (hardware.keys_pressed & kKeyDown)  cur_grid_y_ = (std::min)(9, cur_grid_y_ + 1);
+  if (hardware.keys_pressed & kKeyUp)    cur_grid_y_ = (std::max)(0, cur_grid_y_ - 1);
+
+  // 3. PC Native Touchscreen & Direct Mouse Pointer Navigation (Absolute Target Steering)
   if (input_mapping_.mouse_enabled && hwnd_ != nullptr) {
     HWND hwnd = static_cast<HWND>(hwnd_);
     POINT cursor_pos;
@@ -789,70 +795,61 @@ bool Window::process_events(Hardware& hardware) {
           // Direct Memory Mode: teleport game cursor to follow mouse
           mouse_cursor_.handle_move(gba_x, gba_y);
         } else {
-          // Responsive 1:1 Direct Mouse Displacement Engine
-          if (!mouse_has_prev_pos_) {
-            last_mouse_gba_x_ = gba_x;
-            last_mouse_gba_y_ = gba_y;
-            mouse_has_prev_pos_ = true;
-            accum_mouse_dx_ = 0.0f;
-            accum_mouse_dy_ = 0.0f;
-          } else {
-            const int delta_x = gba_x - last_mouse_gba_x_;
-            const int delta_y = gba_y - last_mouse_gba_y_;
-            last_mouse_gba_x_ = gba_x;
-            last_mouse_gba_y_ = gba_y;
+          // Absolute Target Steering:
+          // Mouse pointer defines target tile directly on GBA 240x160 canvas (15x10 grid)
+          const int target_x = std::clamp(gba_x / 16, 0, 14);
+          const int target_y = std::clamp(gba_y / 16, 0, 9);
 
-            if (delta_x != 0 || delta_y != 0) {
-              accum_mouse_dx_ += static_cast<float>(delta_x);
-              accum_mouse_dy_ += static_cast<float>(delta_y);
-              mouse_idle_frames_ = 0;
-            } else {
-              mouse_idle_frames_++;
-              // Decay accumulators when mouse stops moving
-              if (mouse_idle_frames_ > 2) {
-                accum_mouse_dx_ *= 0.5f;
-                accum_mouse_dy_ *= 0.5f;
-              }
-            }
-
-            // Cell displacement threshold (8 GBA canvas pixels = 1 menu/tile step)
-            constexpr float kStepThreshold = 8.0f;
-
-            if (accum_mouse_dx_ >= kStepThreshold) {
-              hardware.keys_pressed |= kKeyRight;
-              accum_mouse_dx_ -= kStepThreshold;
-            } else if (accum_mouse_dx_ <= -kStepThreshold) {
-              hardware.keys_pressed |= kKeyLeft;
-              accum_mouse_dx_ += kStepThreshold;
-            }
-
-            if (accum_mouse_dy_ >= kStepThreshold) {
-              hardware.keys_pressed |= kKeyDown;
-              accum_mouse_dy_ -= kStepThreshold;
-            } else if (accum_mouse_dy_ <= -kStepThreshold) {
-              hardware.keys_pressed |= kKeyUp;
-              accum_mouse_dy_ += kStepThreshold;
-            }
+          if (!mouse_grid_init_) {
+            cur_grid_x_ = target_x;
+            cur_grid_y_ = target_y;
+            mouse_grid_init_ = true;
           }
-        }
 
-        // Left Click edge detection: inject A press
-        const bool left_down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-        if (left_down && !mouse_left_was_down_) {
-          std::uint16_t keys = mouse_cursor_.handle_click(gba_x, gba_y);
-          hardware.keys_pressed |= keys;
-        }
-        mouse_left_was_down_ = left_down;
+          // Continuously step towards target tile (whether mouse is moving OR stationary)
+          if (mouse_step_timer_ <= 0) {
+            std::uint16_t step_pulse = 0;
+            if (cur_grid_x_ < target_x) {
+              step_pulse = kKeyRight;
+              cur_grid_x_++;
+            } else if (cur_grid_x_ > target_x) {
+              step_pulse = kKeyLeft;
+              cur_grid_x_--;
+            } else if (cur_grid_y_ < target_y) {
+              step_pulse = kKeyDown;
+              cur_grid_y_++;
+            } else if (cur_grid_y_ > target_y) {
+              step_pulse = kKeyUp;
+              cur_grid_y_--;
+            }
 
-        // Right Click edge detection: B button
-        const bool right_down = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
-        if (right_down && !mouse_right_was_down_) {
-          hardware.keys_pressed |= kKeyB;
+            if (step_pulse != 0) {
+              hardware.keys_pressed |= step_pulse;
+              mouse_step_timer_ = 1; // Rapid 1-frame step for instant response
+            }
+          } else {
+            mouse_step_timer_--;
+          }
+
+          // Left Click edge detection: snap target immediately & inject A press
+          const bool left_down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+          if (left_down && !mouse_left_was_down_) {
+            cur_grid_x_ = target_x;
+            cur_grid_y_ = target_y;
+            std::uint16_t keys = mouse_cursor_.handle_click(gba_x, gba_y);
+            hardware.keys_pressed |= keys;
+          }
+          mouse_left_was_down_ = left_down;
+
+          // Right Click edge detection: B button
+          const bool right_down = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+          if (right_down && !mouse_right_was_down_) {
+            hardware.keys_pressed |= kKeyB;
+          }
+          mouse_right_was_down_ = right_down;
         }
-        mouse_right_was_down_ = right_down;
 
       } else {
-        mouse_has_prev_pos_ = false;
         mouse_left_was_down_ = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
         mouse_right_was_down_ = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
       }
@@ -861,6 +858,8 @@ bool Window::process_events(Hardware& hardware) {
     hardware.keys_pressed |= mouse_cursor_.consume_pending_keys();
   }
 
+  // Passively scan RAM whenever D-Pad inputs are active to discover cursor RAM addresses
+  mouse_cursor_.update_passive_scan(hardware.keys_pressed);
 
   return is_open_;
 }

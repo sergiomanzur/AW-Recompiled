@@ -43,6 +43,9 @@ public:
   // If not active, returns 0 (caller should use fallback input).
   std::uint16_t handle_click(int gba_x, int gba_y);
 
+  // Passive RAM scanning based on real gameplay D-pad inputs
+  void update_passive_scan(std::uint16_t keys_pressed);
+
   // Handle mouse movement to GBA screen coordinates.
   // For map screens, this teleports the cursor to the tile under the mouse.
   // Returns D-pad bitmask to inject (0 if direct write was used).
@@ -85,6 +88,9 @@ private:
 
   // Scanning state
   int scan_phase_ = -1;  // -1 = not started, 0-3 = phases
+  bool has_snapshot_ = false;
+  int scan_count_x_ = 0;
+  int scan_count_y_ = 0;
   std::vector<std::uint8_t> snapshot_before_;
   std::vector<std::uint32_t> x_candidates_;
   std::vector<std::uint32_t> y_candidates_;
@@ -93,12 +99,11 @@ private:
   int pending_a_frames_ = 0;       // Frames remaining for A press after click
   std::uint16_t pending_keys_ = 0; // Keys to inject next frame
 
-  // EWRAM scan range (Advance Wars uses a relatively small portion)
+  // EWRAM scan range (Full 256 KB EWRAM: 0x02000000 - 0x0203FFFF)
   static constexpr std::uint32_t kEwramBase = 0x02000000;
   static constexpr std::uint32_t kEwramSize = 0x00040000; // 256 KB
-  // We scan a focused range where game state typically lives
   static constexpr std::uint32_t kScanBase = 0x02000000;
-  static constexpr std::uint32_t kScanSize = 0x00020000; // First 128 KB
+  static constexpr std::uint32_t kScanSize = 0x00040000; // Full 256 KB
 };
 
 }  // namespace aw
