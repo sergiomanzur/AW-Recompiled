@@ -92,7 +92,16 @@ Options parse_options(int argc, char** argv) {
   }
 
   if (positional.empty()) {
-    options.rom_path = AW_DEFAULT_ROM_PATH;
+    if (std::filesystem::exists(AW_DEFAULT_ROM_PATH)) {
+      options.rom_path = AW_DEFAULT_ROM_PATH;
+    } else {
+      const std::string selected_rom = aw::Window::open_file_dialog();
+      if (!selected_rom.empty()) {
+        options.rom_path = selected_rom;
+      } else {
+        options.rom_path = AW_DEFAULT_ROM_PATH;
+      }
+    }
     options.pause_on_exit = true;
     options.is_double_click = true;
   } else {
@@ -102,7 +111,7 @@ Options parse_options(int argc, char** argv) {
   return options;
 }
 
-void run_game_loop(const std::filesystem::path& rom_path, const aw::RomImage& rom, int max_frames) {
+void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_frames) {
   try {
     auto ppu_ptr = std::make_unique<aw::Ppu>();
     auto& ppu = *ppu_ptr;
@@ -133,6 +142,25 @@ void run_game_loop(const std::filesystem::path& rom_path, const aw::RomImage& ro
     while (window.is_open()) {
       if (!window.process_events(hardware)) {
         break;
+      }
+
+      // Check if user selected a new ROM from the File -> Open ROM menu
+      if (window.has_pending_rom()) {
+        const std::string new_path = window.consume_pending_rom();
+        try {
+          const auto new_rom = aw::load_rom_file(new_path);
+          if (aw::is_expected_advance_wars_rev1(new_rom)) {
+            aw_mgba_destroy(core);
+            rom_path = new_path;
+            rom = new_rom;
+            core = aw_mgba_create(rom_path.string().c_str(), mgba_buffer.data(), 240);
+            if (!core) {
+              throw std::runtime_error("aw_mgba_create failed for new ROM: " + new_path);
+            }
+          }
+        } catch (const std::exception& e) {
+          std::cerr << "Failed to load pending ROM: " << e.what() << '\n';
+        }
       }
 
       aw_mgba_run_frame(core, hardware.keys_pressed);

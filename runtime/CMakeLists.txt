@@ -175,6 +175,19 @@ target_link_libraries(generated_block_tests PRIVATE aw_runtime)
 
 add_test(NAME generated_block_tests COMMAND generated_block_tests)
 
+add_executable(window_aspect_tests
+  tests/window_aspect_tests.cpp
+)
+
+target_include_directories(window_aspect_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
+)
+
+target_link_libraries(window_aspect_tests PRIVATE aw_runtime)
+
+add_test(NAME window_aspect_tests COMMAND window_aspect_tests)
+
 add_executable(advance-wars-native
   src/main.cpp
 )
