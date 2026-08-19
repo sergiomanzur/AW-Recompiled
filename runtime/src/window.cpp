@@ -9,6 +9,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 
 namespace aw {
@@ -108,6 +109,45 @@ void apply_scale2x(const std::uint32_t* src, std::uint32_t* dst, int w, int h) {
       dst[out_y * out_w + out_x + 1]   = E1;
       dst[(out_y + 1) * out_w + out_x] = E2;
       dst[(out_y + 1) * out_w + out_x + 1] = E3;
+    }
+  }
+}
+
+void apply_bilinear_2x(const std::uint32_t* src, std::uint32_t* dst, int w, int h) {
+  const int out_w = w * 2;
+  const int out_h = h * 2;
+  for (int y = 0; y < out_h; ++y) {
+    const float src_y = (y + 0.5f) * 0.5f - 0.5f;
+    const int y0 = (src_y < 0) ? 0 : ((static_cast<int>(src_y) < h - 1) ? static_cast<int>(src_y) : h - 1);
+    const int y1 = (y0 + 1 < h) ? (y0 + 1) : (h - 1);
+    const float fy = src_y - y0;
+
+    for (int x = 0; x < out_w; ++x) {
+      const float src_x = (x + 0.5f) * 0.5f - 0.5f;
+      const int x0 = (src_x < 0) ? 0 : ((static_cast<int>(src_x) < w - 1) ? static_cast<int>(src_x) : w - 1);
+      const int x1 = (x0 + 1 < w) ? (x0 + 1) : (w - 1);
+      const float fx = src_x - x0;
+
+      const std::uint32_t c00 = src[y0 * w + x0];
+      const std::uint32_t c10 = src[y0 * w + x1];
+      const std::uint32_t c01 = src[y1 * w + x0];
+      const std::uint32_t c11 = src[y1 * w + x1];
+
+      const float w00 = (1.0f - fx) * (1.0f - fy);
+      const float w10 = fx * (1.0f - fy);
+      const float w01 = (1.0f - fx) * fy;
+      const float w11 = fx * fy;
+
+      const std::uint32_t r00 = (c00 >> 16) & 0xFF, g00 = (c00 >> 8) & 0xFF, b00 = c00 & 0xFF;
+      const std::uint32_t r10 = (c10 >> 16) & 0xFF, g10 = (c10 >> 8) & 0xFF, b10 = c10 & 0xFF;
+      const std::uint32_t r01 = (c01 >> 16) & 0xFF, g01 = (c01 >> 8) & 0xFF, b01 = c01 & 0xFF;
+      const std::uint32_t r11 = (c11 >> 16) & 0xFF, g11 = (c11 >> 8) & 0xFF, b11 = c11 & 0xFF;
+
+      const auto r = static_cast<std::uint32_t>(r00 * w00 + r10 * w10 + r01 * w01 + r11 * w11 + 0.5f);
+      const auto g = static_cast<std::uint32_t>(g00 * w00 + g10 * w10 + g01 * w01 + g11 * w11 + 0.5f);
+      const auto b = static_cast<std::uint32_t>(b00 * w00 + b10 * w10 + b01 * w01 + b11 * w11 + 0.5f);
+
+      dst[y * out_w + x] = 0xFF000000u | (r << 16) | (g << 8) | b;
     }
   }
 }
@@ -468,66 +508,47 @@ void Window::render(const Ppu& ppu) {
     FillRect(hdc, &bottom_rect, black_brush);
   }
 
-  // Set GDI stretch mode for anti-aliased / bilinear smoothing vs crisp pixels
-  if (video_filter_ == VideoFilter::Bilinear || video_filter_ == VideoFilter::Scale2x) {
-    SetStretchBltMode(hdc, HALFTONE);
-    SetBrushOrgEx(hdc, 0, 0, NULL);
-  } else {
-    SetStretchBltMode(hdc, COLORONCOLOR);
-  }
+  // Use COLORONCOLOR for hardware-fast blitting at 1080p and 4K (eliminating slow GDI HALFTONE CPU lag)
+  SetStretchBltMode(hdc, COLORONCOLOR);
+
+  const std::uint32_t* render_data = ppu.framebuffer.data();
+  int src_w = kGbaWidth;
+  int src_h = kGbaHeight;
 
   if (video_filter_ == VideoFilter::Scale2x && !scale2x_buffer_.empty()) {
     apply_scale2x(ppu.framebuffer.data(), scale2x_buffer_.data(), kGbaWidth, kGbaHeight);
-
-    const int src_w = kGbaWidth * 2;
-    const int src_h = kGbaHeight * 2;
-
-    BITMAPINFO bmi = {};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = src_w;
-    bmi.bmiHeader.biHeight = -src_h; // Top-down
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    StretchDIBits(
-        hdc,
-        vp.x,
-        vp.y,
-        vp.width,
-        vp.height,
-        0,
-        0,
-        src_w,
-        src_h,
-        scale2x_buffer_.data(),
-        &bmi,
-        DIB_RGB_COLORS,
-        SRCCOPY);
-  } else {
-    BITMAPINFO bmi = {};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = kGbaWidth;
-    bmi.bmiHeader.biHeight = -kGbaHeight; // Top-down
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    StretchDIBits(
-        hdc,
-        vp.x,
-        vp.y,
-        vp.width,
-        vp.height,
-        0,
-        0,
-        kGbaWidth,
-        kGbaHeight,
-        ppu.framebuffer.data(),
-        &bmi,
-        DIB_RGB_COLORS,
-        SRCCOPY);
+    render_data = scale2x_buffer_.data();
+    src_w = kGbaWidth * 2;
+    src_h = kGbaHeight * 2;
+  } else if (video_filter_ == VideoFilter::Bilinear && !scale2x_buffer_.empty()) {
+    apply_bilinear_2x(ppu.framebuffer.data(), scale2x_buffer_.data(), kGbaWidth, kGbaHeight);
+    render_data = scale2x_buffer_.data();
+    src_w = kGbaWidth * 2;
+    src_h = kGbaHeight * 2;
   }
+
+  BITMAPINFO bmi = {};
+  bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  bmi.bmiHeader.biWidth = src_w;
+  bmi.bmiHeader.biHeight = -src_h; // Top-down
+  bmi.bmiHeader.biPlanes = 1;
+  bmi.bmiHeader.biBitCount = 32;
+  bmi.bmiHeader.biCompression = BI_RGB;
+
+  StretchDIBits(
+      hdc,
+      vp.x,
+      vp.y,
+      vp.width,
+      vp.height,
+      0,
+      0,
+      src_w,
+      src_h,
+      render_data,
+      &bmi,
+      DIB_RGB_COLORS,
+      SRCCOPY);
 }
 
 #else
