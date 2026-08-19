@@ -102,10 +102,16 @@ private:
 
   InputMapping input_mapping_;
 
-  // PC Native Mouse Cursor Support (Direct Memory Access)
+  // PC Native Mouse Cursor Support (Direct Memory Access + Fallback D-Pad Pulses)
   MouseCursor mouse_cursor_;
   bool mouse_left_was_down_ = false;   // Edge detection for left click
   bool mouse_right_was_down_ = false;  // Edge detection for right click
+  bool mouse_has_prev_pos_ = false;
+  int last_mouse_gba_x_ = 0;
+  int last_mouse_gba_y_ = 0;
+  float accum_mouse_dx_ = 0.0f;
+  float accum_mouse_dy_ = 0.0f;
+  int mouse_step_cooldown_ = 0;
 
   // High-resolution & Scale2x filtering buffers
   std::vector<std::uint32_t> scale2x_buffer_;

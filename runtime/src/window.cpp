@@ -777,7 +777,7 @@ bool Window::process_events(Hardware& hardware) {
     }
   }
 
-  // 3. PC Native Mouse Cursor Support (Direct Memory Click-to-Navigate)
+  // 3. PC Native Mouse Cursor Support & Navigation
   if (input_mapping_.mouse_enabled && hwnd_ != nullptr) {
     HWND hwnd = static_cast<HWND>(hwnd_);
     POINT cursor_pos;
@@ -785,15 +785,59 @@ bool Window::process_events(Hardware& hardware) {
       int gba_x = 0, gba_y = 0;
       if (client_to_gba(cursor_pos.x, cursor_pos.y, gba_x, gba_y)) {
 
-        // Mouse move: if active, teleport game cursor to follow mouse
         if (mouse_cursor_.is_active()) {
+          // Direct Memory Mode: teleport game cursor to follow mouse
           mouse_cursor_.handle_move(gba_x, gba_y);
+        } else {
+          // D-Pad Pulse Translation Mode: convert mouse movement to D-pad pulses
+          if (!mouse_has_prev_pos_) {
+            last_mouse_gba_x_ = gba_x;
+            last_mouse_gba_y_ = gba_y;
+            mouse_has_prev_pos_ = true;
+            accum_mouse_dx_ = 0.0f;
+            accum_mouse_dy_ = 0.0f;
+            mouse_step_cooldown_ = 0;
+          } else {
+            const int delta_x = gba_x - last_mouse_gba_x_;
+            const int delta_y = gba_y - last_mouse_gba_y_;
+            last_mouse_gba_x_ = gba_x;
+            last_mouse_gba_y_ = gba_y;
+
+            if (delta_x != 0 || delta_y != 0) {
+              accum_mouse_dx_ += static_cast<float>(delta_x);
+              accum_mouse_dy_ += static_cast<float>(delta_y);
+            }
+
+            constexpr float kStepThreshold = 12.0f;
+            if (mouse_step_cooldown_ <= 0) {
+              std::uint16_t dir_pulse = 0;
+              if (accum_mouse_dx_ >= kStepThreshold) {
+                dir_pulse = kKeyRight;
+                accum_mouse_dx_ -= kStepThreshold;
+              } else if (accum_mouse_dx_ <= -kStepThreshold) {
+                dir_pulse = kKeyLeft;
+                accum_mouse_dx_ += kStepThreshold;
+              } else if (accum_mouse_dy_ >= kStepThreshold) {
+                dir_pulse = kKeyDown;
+                accum_mouse_dy_ -= kStepThreshold;
+              } else if (accum_mouse_dy_ <= -kStepThreshold) {
+                dir_pulse = kKeyUp;
+                accum_mouse_dy_ += kStepThreshold;
+              }
+
+              if (dir_pulse != 0) {
+                hardware.keys_pressed |= dir_pulse;
+                mouse_step_cooldown_ = 4;
+              }
+            } else {
+              mouse_step_cooldown_--;
+            }
+          }
         }
 
-        // Left Click edge detection: inject cursor teleport + A press
+        // Left Click edge detection: inject A press (or cursor teleport + A)
         const bool left_down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
         if (left_down && !mouse_left_was_down_) {
-          // Rising edge of left click
           std::uint16_t keys = mouse_cursor_.handle_click(gba_x, gba_y);
           hardware.keys_pressed |= keys;
         }
@@ -807,13 +851,14 @@ bool Window::process_events(Hardware& hardware) {
         mouse_right_was_down_ = right_down;
 
       } else {
-        // Mouse outside viewport — reset edge detection
+        // Mouse outside viewport
+        mouse_has_prev_pos_ = false;
         mouse_left_was_down_ = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
         mouse_right_was_down_ = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
       }
     }
 
-    // Consume any pending keys from MouseCursor (delayed A press after teleport)
+    // Consume any pending keys from MouseCursor
     hardware.keys_pressed |= mouse_cursor_.consume_pending_keys();
   }
 
