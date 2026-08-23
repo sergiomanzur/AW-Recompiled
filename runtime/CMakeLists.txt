@@ -31,6 +31,7 @@ add_library(aw_runtime STATIC
   src/ppu.cpp
   src/probe/backend_mgba.cpp
   src/probe/oam.cpp
+  src/probe/oam_tracker.cpp
   src/rom.cpp
   src/window.cpp
   src/mgba_adapter.c
@@ -218,6 +219,19 @@ target_include_directories(oam_tests PRIVATE
 target_link_libraries(oam_tests PRIVATE aw_runtime)
 
 add_test(NAME oam_tests COMMAND oam_tests)
+
+add_executable(oam_tracker_tests
+  tests/oam_tracker_tests.cpp
+)
+
+target_include_directories(oam_tracker_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
+)
+
+target_link_libraries(oam_tracker_tests PRIVATE aw_runtime)
+
+add_test(NAME oam_tracker_tests COMMAND oam_tracker_tests)
 
 add_executable(advance-wars-native
   src/main.cpp
