@@ -3,7 +3,6 @@
 #include "aw/config_file.hpp"
 #include "aw/hardware.hpp"
 #include "aw/input_config.hpp"
-#include "aw/mouse_cursor.hpp"
 #include "aw/ppu.hpp"
 #include <string>
 #include <vector>
@@ -78,10 +77,6 @@ public:
 
   void set_pending_rom(const std::string& path) { pending_rom_path_ = path; }
 
-  // mGBA core pointer for direct memory access (mouse cursor support)
-  void set_mgba_core(void* core);
-  MouseCursor& mouse_cursor() { return mouse_cursor_; }
-
 private:
   void update_menu_checks();
 
@@ -97,19 +92,10 @@ private:
   int height_ = 640;
   AspectRatio aspect_ratio_ = AspectRatio::Original_3_2;
   InternalResolution internal_resolution_ = InternalResolution::Native;
-  VideoFilter video_filter_ = VideoFilter::Bilinear;
+  VideoFilter video_filter_ = VideoFilter::NearestNeighbor;
   std::string pending_rom_path_;
 
   InputMapping input_mapping_;
-
-  // PC Native Touchscreen & Direct Mouse Pointer Navigation (Absolute Target Steering)
-  MouseCursor mouse_cursor_;
-  int cur_grid_x_ = 0;           // Tracked in-game cursor X tile (0..14)
-  int cur_grid_y_ = 0;           // Tracked in-game cursor Y tile (0..9)
-  int mouse_step_timer_ = 0;     // Frame timer between steps towards target
-  bool mouse_grid_init_ = false; // True once target coordinates are initialized
-  bool mouse_left_was_down_ = false;   // Edge detection for left click
-  bool mouse_right_was_down_ = false;  // Edge detection for right click
 
   // High-resolution & Scale2x filtering buffers
   std::vector<std::uint32_t> scale2x_buffer_;

@@ -715,10 +715,6 @@ std::string Window::open_file_dialog(void* parent_hwnd) {
   return "";
 }
 
-void Window::set_mgba_core(void* core) {
-  mouse_cursor_.set_core(reinterpret_cast<mCore*>(core));
-}
-
 bool Window::client_to_gba(int client_x, int client_y, int& gba_x, int& gba_y) const {
   const ViewportRect& vp = cached_viewport_;
   if (vp.width <= 0 || vp.height <= 0) return false;
@@ -776,102 +772,6 @@ bool Window::process_events(Hardware& hardware) {
       if (xstate.Gamepad.sThumbLX > kDeadZone) hardware.keys_pressed |= kKeyRight;
     }
   }
-
-  // Update tracked grid position when manual D-pad keys are pressed
-  if (hardware.keys_pressed & kKeyRight) cur_grid_x_ = (std::min)(14, cur_grid_x_ + 1);
-  if (hardware.keys_pressed & kKeyLeft)  cur_grid_x_ = (std::max)(0, cur_grid_x_ - 1);
-  if (hardware.keys_pressed & kKeyDown)  cur_grid_y_ = (std::min)(9, cur_grid_y_ + 1);
-  if (hardware.keys_pressed & kKeyUp)    cur_grid_y_ = (std::max)(0, cur_grid_y_ - 1);
-
-  // 3. PC Native Touchscreen & Direct Mouse Pointer Navigation (Absolute Target Steering)
-  if (input_mapping_.mouse_enabled && hwnd_ != nullptr) {
-    HWND hwnd = static_cast<HWND>(hwnd_);
-    POINT cursor_pos;
-    if (GetCursorPos(&cursor_pos) && ScreenToClient(hwnd, &cursor_pos)) {
-      int gba_x = 0, gba_y = 0;
-      if (client_to_gba(cursor_pos.x, cursor_pos.y, gba_x, gba_y)) {
-
-        if (mouse_cursor_.is_active()) {
-          // Direct Memory Mode: teleport game cursor to follow mouse
-          mouse_cursor_.handle_move(gba_x, gba_y);
-        } else {
-          // 1:1 Precise Screen-to-Grid Target Calculation
-          // The Name Entry Keyboard box occupies X=76..236, Y=56..142 on the 240x160 GBA screen.
-          // Col = 15 columns (10 px per col) starting at X=80
-          // Row = 6 rows (12 px per row) starting at Y=58
-          int target_x = std::clamp((gba_x - 80) / 10, 0, 14);
-          int target_y = std::clamp((gba_y - 58) / 12, 0, 5);
-
-          // Real-Time Debug Logging (printed when target changes)
-          static int last_dbg_x = -1, last_dbg_y = -1;
-          if (target_x != last_dbg_x || target_y != last_dbg_y) {
-            std::cout << "[Mouse Debug] GBA Pos: (" << gba_x << ", " << gba_y
-                      << ") -> Target Grid: (Col " << target_x << ", Row " << target_y
-                      << ") | Cur Grid: (" << cur_grid_x_ << ", " << cur_grid_y_ << ")" << std::endl;
-            last_dbg_x = target_x;
-            last_dbg_y = target_y;
-          }
-
-          if (!mouse_grid_init_) {
-            cur_grid_x_ = target_x;
-            cur_grid_y_ = target_y;
-            mouse_grid_init_ = true;
-          }
-
-          // Continuously step towards target tile (whether mouse is moving OR stationary)
-          if (mouse_step_timer_ <= 0) {
-            std::uint16_t step_pulse = 0;
-            if (cur_grid_x_ < target_x) {
-              step_pulse = kKeyRight;
-              cur_grid_x_++;
-            } else if (cur_grid_x_ > target_x) {
-              step_pulse = kKeyLeft;
-              cur_grid_x_--;
-            } else if (cur_grid_y_ < target_y) {
-              step_pulse = kKeyDown;
-              cur_grid_y_++;
-            } else if (cur_grid_y_ > target_y) {
-              step_pulse = kKeyUp;
-              cur_grid_y_--;
-            }
-
-            if (step_pulse != 0) {
-              hardware.keys_pressed |= step_pulse;
-              mouse_step_timer_ = 1; // Rapid 1-frame step for instant response
-            }
-          } else {
-            mouse_step_timer_--;
-          }
-
-          // Left Click edge detection: snap target immediately & inject A press
-          const bool left_down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-          if (left_down && !mouse_left_was_down_) {
-            cur_grid_x_ = target_x;
-            cur_grid_y_ = target_y;
-            std::uint16_t keys = mouse_cursor_.handle_click(gba_x, gba_y);
-            hardware.keys_pressed |= keys;
-          }
-          mouse_left_was_down_ = left_down;
-
-          // Right Click edge detection: B button
-          const bool right_down = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
-          if (right_down && !mouse_right_was_down_) {
-            hardware.keys_pressed |= kKeyB;
-          }
-          mouse_right_was_down_ = right_down;
-        }
-
-      } else {
-        mouse_left_was_down_ = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-        mouse_right_was_down_ = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
-      }
-    }
-
-    hardware.keys_pressed |= mouse_cursor_.consume_pending_keys();
-  }
-
-  // Passively scan RAM whenever D-Pad inputs are active to discover cursor RAM addresses
-  mouse_cursor_.update_passive_scan(hardware.keys_pressed);
 
   return is_open_;
 }
@@ -1005,7 +905,6 @@ void Window::resize_client(int /*width*/, int /*height*/) {}
 std::string Window::consume_pending_rom() { return ""; }
 std::string Window::open_file_dialog(void* /*parent_hwnd*/) { return ""; }
 void Window::update_menu_checks() {}
-void Window::set_mgba_core(void* /*core*/) {}
 bool Window::client_to_gba(int /*client_x*/, int /*client_y*/, int& /*gba_x*/, int& /*gba_y*/) const { return false; }
 
 #endif

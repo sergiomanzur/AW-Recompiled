@@ -162,9 +162,6 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       throw std::runtime_error("aw_mgba_create failed for ROM: " + rom_path.string());
     }
 
-    // Give the window access to the mGBA core for direct memory mouse cursor support
-    window.set_mgba_core(core);
-
     const unsigned core_sample_rate = aw_mgba_audio_sample_rate(core);
     std::cout << "Core audio sample rate: " << core_sample_rate << " Hz (audio backend "
               << (audio.is_active() ? "active" : "inactive") << ")\n";
@@ -188,9 +185,6 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         if (!core) {
           throw std::runtime_error("aw_mgba_create failed for new ROM: " + rom_path.string());
         }
-        // Update the core pointer for mouse cursor support
-        window.set_mgba_core(core);
-        window.mouse_cursor().reset();
       }
 
       hardware.keys_pressed = 0;
@@ -214,30 +208,24 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         total_audio_samples += samples_read;
       }
 
-      // Update PPU framebuffer from mGBA video buffer
-      std::copy_n(mgba_buffer.data(), 240 * 160, ppu.framebuffer.begin());
+      // Update PPU framebuffer from mGBA video buffer with proper R/B channel mapping for Win32 GDI
+      const std::uint32_t* src_buf = mgba_buffer.data();
+      std::uint32_t* dst_buf = ppu.framebuffer.data();
+      for (std::size_t i = 0; i < 240 * 160; ++i) {
+        const std::uint32_t c = src_buf[i];
+        dst_buf[i] = ((c & 0x000000FF) << 16) | (c & 0x0000FF00) | ((c & 0x00FF0000) >> 16);
+      }
 
       // Render frame to window
       window.render(ppu);
 
-      // Frame pacing: align pacing to audio queue depth when audio is active
-      if (audio.is_active()) {
-        constexpr std::size_t kAudioTargetFrames = 2048;
-        while (window.is_open() && audio.queued_frames() > kAudioTargetFrames) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(1));
-          hardware.keys_pressed = 0;
-          if (!window.process_events(hardware)) {
-            break;
-          }
-        }
-      } else {
-        next_frame_time += frame_duration_ns;
-        const auto now = clock::now();
-        if (next_frame_time > now) {
-          std::this_thread::sleep_for(next_frame_time - now);
-        } else {
-          next_frame_time = now;
-        }
+      // High-precision steady frame pacing for locked 60 FPS
+      next_frame_time += frame_duration_ns;
+      const auto now = clock::now();
+      if (next_frame_time > now) {
+        std::this_thread::sleep_for(next_frame_time - now);
+      } else if (now - next_frame_time > std::chrono::milliseconds(100)) {
+        next_frame_time = now;
       }
 
       if (max_frames > 0 && frames_run >= static_cast<std::uint64_t>(max_frames)) {
