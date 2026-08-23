@@ -97,27 +97,185 @@ void tests_correlation_locks_on_after_consistent_agreement() {
   require_equal(ind.screen_x, x, "locked x");
 }
 
+void tests_lock_anchors_to_the_earning_sprite_not_a_decoy_with_the_same_signature() {
+  aw::OamTracker tracker;  // No signature set; correlation only.
+
+  OamBuffer oam;
+  // The decoy sits at a LOWER OAM index than the mover and shares the exact
+  // same tile+palette, but never moves. Before anchoring to an OAM index,
+  // find_by_signature() reported "lowest index with a matching signature" --
+  // this decoy -- forever, even though it never earned the lock.
+  oam.place(1, /*x=*/150, /*y=*/40, /*tile=*/0x2A0, /*palette=*/5);  // decoy
+  int x = 20;
+  oam.place(6, x, 100, /*tile=*/0x2A0, /*palette=*/5);  // mover, same signature
+
+  tracker.update(oam.bytes.data(), 0);
+
+  for (int i = 0; i < 3; ++i) {
+    x += 16;
+    oam.place(6, x, 100, 0x2A0, 5);
+    tracker.update(oam.bytes.data(), aw::kKeyRight);
+  }
+  require_equal(tracker.locked(), true, "locked onto the shared signature");
+
+  const aw::Indicator ind = tracker.update(oam.bytes.data(), 0);
+  require_equal(ind.found, true, "reports a position");
+  require_equal(ind.oam_index, std::size_t{6},
+                "reports the sprite that earned the lock, not the lower-index decoy");
+  require_equal(ind.screen_x, x, "reports the mover's position, not the decoy's");
+}
+
+void tests_lock_breaks_when_the_locked_sprite_reverses() {
+  aw::OamTracker tracker;
+
+  OamBuffer oam;
+  int x = 32;
+  oam.place(5, x, 64, /*tile=*/0x111, /*palette=*/1);
+  tracker.update(oam.bytes.data(), 0);
+
+  for (int i = 0; i < 3; ++i) {
+    x += 16;
+    oam.place(5, x, 64, 0x111, 1);
+    tracker.update(oam.bytes.data(), aw::kKeyRight);
+  }
+  require_equal(tracker.locked(), true, "locked after consistent agreement");
+
+  // Still holding Right, but the sprite now reverses every frame. A lock
+  // that never re-evaluates would keep reporting this sprite forever; the
+  // score must fall and the lock must break instead.
+  for (int i = 0; i < 3; ++i) {
+    x -= 16;
+    oam.place(5, x, 64, 0x111, 1);
+    tracker.update(oam.bytes.data(), aw::kKeyRight);
+  }
+
+  require_equal(tracker.locked(), false, "lock breaks once the sprite stops agreeing");
+}
+
 void tests_correlation_ignores_sprites_moving_the_wrong_way() {
   aw::OamTracker tracker;
 
   OamBuffer oam;
-  int good = 32;
+  // The wrong-direction sprite sits at a LOWER OAM index than the correct
+  // one. correlate() scans indices in ascending order and locks onto the
+  // first candidate to cross the score threshold within a frame, so if the
+  // sign check were ever broken (both sprites credited as "agreeing"), the
+  // lower index would win the tie and this test would catch the wrong lock.
+  // With a correct sign check the wrong-direction sprite's score only ever
+  // goes negative, so it can never win regardless of index order.
   int bad = 180;
-  oam.place(1, good, 64, /*tile=*/0x300, /*palette=*/1);
-  oam.place(2, bad, 90, /*tile=*/0x400, /*palette=*/2);
+  int good = 32;
+  oam.place(1, bad, 90, /*tile=*/0x400, /*palette=*/2);
+  oam.place(2, good, 64, /*tile=*/0x300, /*palette=*/1);
   tracker.update(oam.bytes.data(), 0);
 
-  // Press Right repeatedly. Entry 1 moves right; entry 2 moves *left*.
+  // Press Right repeatedly. Entry 1 (lower index) moves *left*; entry 2
+  // (higher index) moves right.
   for (int i = 0; i < 3; ++i) {
-    good += 16;
     bad -= 16;
-    oam.place(1, good, 64, 0x300, 1);
-    oam.place(2, bad, 90, 0x400, 2);
+    good += 16;
+    oam.place(1, bad, 90, 0x400, 2);
+    oam.place(2, good, 64, 0x300, 1);
     tracker.update(oam.bytes.data(), aw::kKeyRight);
   }
 
   require_equal(tracker.locked(), true, "locked");
   require_equal(tracker.signature().tile, 0x300, "locked onto the agreeing sprite");
+}
+
+void tests_correlation_ignores_ambiguous_diagonal_chords() {
+  aw::OamTracker tracker;
+
+  OamBuffer oam;
+  int x = 32;
+  int y = 96;
+  oam.place(3, x, y, /*tile=*/0x123, /*palette=*/4);
+  tracker.update(oam.bytes.data(), 0);
+
+  const std::uint16_t chord = aw::kKeyRight | aw::kKeyDown;
+  // Every frame the sprite moves right (agrees with Right) and up (opposes
+  // Down): a diagonal half-agreement that must not be scored either way, or
+  // it would eventually lock onto a sprite that only ever half-obeyed.
+  for (int i = 0; i < 6; ++i) {
+    x += 16;
+    y -= 16;
+    oam.place(3, x, y, 0x123, 4);
+    tracker.update(oam.bytes.data(), chord);
+  }
+
+  require_equal(tracker.locked(), false, "ambiguous diagonal agreement never locks");
+}
+
+void tests_max_step_pixels_boundary() {
+  {
+    aw::OamTracker tracker;
+    OamBuffer oam;
+    int x = 0;
+    oam.place(4, x, 50, /*tile=*/0x0A0, /*palette=*/2);
+    tracker.update(oam.bytes.data(), 0);
+
+    // A step of exactly kMaxStepPixels (32) is still a cursor move.
+    for (int i = 0; i < 3; ++i) {
+      x += 32;
+      oam.place(4, x, 50, 0x0A0, 2);
+      tracker.update(oam.bytes.data(), aw::kKeyRight);
+    }
+    require_equal(tracker.locked(), true, "a 32px step is accepted");
+    require_equal(tracker.signature().tile, 0x0A0, "locked onto the 32px stepper");
+  }
+  {
+    aw::OamTracker tracker;
+    OamBuffer oam;
+    int x = 0;
+    oam.place(4, x, 50, /*tile=*/0x0B0, /*palette=*/2);
+    tracker.update(oam.bytes.data(), 0);
+
+    // A step of 33px (just past kMaxStepPixels) is a scene jump, not a
+    // cursor move, and must never contribute to the score no matter how
+    // many frames it repeats.
+    for (int i = 0; i < 6; ++i) {
+      x += 33;
+      oam.place(4, x, 50, 0x0B0, 2);
+      tracker.update(oam.bytes.data(), aw::kKeyRight);
+    }
+    require_equal(tracker.locked(), false, "a 33px step never locks");
+  }
+}
+
+void tests_stale_signature_drops_then_recorrelates() {
+  aw::OamTracker tracker;
+  tracker.set_signature({/*tile=*/0x555, /*palette=*/1});
+
+  OamBuffer oam;  // The signature never appears anywhere on screen.
+  int x = 40;
+  // Tile IDs are a 10-bit OAM field (max 0x3FF); stay under that so the
+  // value read back after the place()/decode_oam_entry() round trip is
+  // exactly the constant used here.
+  oam.place(9, x, 70, /*tile=*/0x1D0, /*palette=*/6);
+
+  const aw::Indicator primed = tracker.update(oam.bytes.data(), 0);
+  require_equal(primed.found, false, "stale signature never matches");
+  require_equal(tracker.locked(), true, "starts locked from the explicit signature");
+
+  // The signature never matches anything on screen; after kUnlockFrames (60)
+  // frames of absence the tracker must give up on it rather than reporting
+  // it, or nothing, forever.
+  for (int i = 0; i < 60; ++i) {
+    const aw::Indicator ind = tracker.update(oam.bytes.data(), 0);
+    require_equal(ind.found, false, "stale signature never matches");
+  }
+  require_equal(tracker.locked(), false, "gives up on a stale signature");
+
+  // Drive a different sprite with the D-pad; correlation should pick it up
+  // exactly as it would if no signature had ever been set.
+  for (int i = 0; i < 3; ++i) {
+    x += 16;
+    oam.place(9, x, 70, 0x1D0, 6);
+    tracker.update(oam.bytes.data(), aw::kKeyRight);
+  }
+
+  require_equal(tracker.locked(), true, "re-locks by correlation after the drop");
+  require_equal(tracker.signature().tile, 0x1D0, "locked onto the new sprite");
 }
 
 void tests_indicator_absent_is_reported_not_crashed() {
@@ -153,7 +311,12 @@ int main() {
     tests_signature_lock_reports_position_immediately();
     tests_signature_wildcards_match_any_palette();
     tests_correlation_locks_on_after_consistent_agreement();
+    tests_lock_anchors_to_the_earning_sprite_not_a_decoy_with_the_same_signature();
+    tests_lock_breaks_when_the_locked_sprite_reverses();
     tests_correlation_ignores_sprites_moving_the_wrong_way();
+    tests_correlation_ignores_ambiguous_diagonal_chords();
+    tests_max_step_pixels_boundary();
+    tests_stale_signature_drops_then_recorrelates();
     tests_indicator_absent_is_reported_not_crashed();
     tests_null_oam_is_safe();
     tests_reset_clears_the_lock();

@@ -51,10 +51,16 @@ public:
   IndicatorSignature signature() const { return signature_; }
 
 private:
-  Indicator find_by_signature(const std::uint8_t* oam) const;
+  // Not const: on a fallback scan it re-anchors locked_index_ to whatever it
+  // finds, so the anchor survives OAM reshuffling.
+  Indicator find_by_signature(const std::uint8_t* oam);
   void correlate(const std::uint8_t* oam, std::uint16_t emitted_dpad);
 
   static constexpr int kLockScore = 3;      // Net agreements needed to lock
+  static constexpr int kUnlockScore = 0;    // Score at/below this while locked breaks
+                                             // the lock, so a decoy that stalls or
+                                             // starts reversing doesn't get reported
+                                             // forever.
   static constexpr int kMaxStepPixels = 32; // Larger jumps are not cursor steps
   static constexpr int kUnlockFrames = 60;  // Frames absent before re-locking
   static constexpr std::size_t kMaxCandidates = 32;
@@ -71,6 +77,11 @@ private:
   bool locked_ = false;
   bool has_prev_ = false;
   int missing_frames_ = 0;
+  // The OAM index that earned the current lock. A signature alone isn't
+  // enough to report the right sprite: many units share tile+palette, so we
+  // anchor to the specific slot that moved, and only fall back to a fresh
+  // signature scan (re-anchoring) if that slot stops matching.
+  std::size_t locked_index_ = kOamEntryCount;
   std::array<OamEntry, kOamEntryCount> prev_{};
   std::array<Candidate, kMaxCandidates> candidates_{};
 };
