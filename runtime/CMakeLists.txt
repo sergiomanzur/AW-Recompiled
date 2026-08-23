@@ -30,6 +30,7 @@ add_library(aw_runtime STATIC
   src/memory.cpp
   src/ppu.cpp
   src/probe/backend_mgba.cpp
+  src/probe/oam.cpp
   src/rom.cpp
   src/window.cpp
   src/mgba_adapter.c
@@ -204,6 +205,19 @@ target_include_directories(input_core_tests PRIVATE
 target_link_libraries(input_core_tests PRIVATE aw_runtime)
 
 add_test(NAME input_core_tests COMMAND input_core_tests)
+
+add_executable(oam_tests
+  tests/oam_tests.cpp
+)
+
+target_include_directories(oam_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
+)
+
+target_link_libraries(oam_tests PRIVATE aw_runtime)
+
+add_test(NAME oam_tests COMMAND oam_tests)
 
 add_executable(advance-wars-native
   src/main.cpp
