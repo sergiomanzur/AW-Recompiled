@@ -18,6 +18,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 struct mCore* aw_mgba_create(const char* rom_path, void* video_buffer, size_t stride) {
     struct mCore* core = mCoreFind(rom_path);
@@ -125,4 +126,26 @@ uint16_t aw_mgba_read16(struct mCore* core, uint32_t address) {
 void aw_mgba_write16(struct mCore* core, uint32_t address, uint16_t value) {
     if (!core || !core->rawWrite16) return;
     core->rawWrite16(core, address, -1, value);
+}
+
+void* aw_mgba_memory_block(struct mCore* core, const char* internal_name, size_t* size_out) {
+    if (size_out) *size_out = 0;
+    if (!core || !internal_name) return NULL;
+    if (!core->listMemoryBlocks || !core->getMemoryBlock) return NULL;
+
+    const struct mCoreMemoryBlock* blocks = NULL;
+    const size_t count = core->listMemoryBlocks(core, &blocks);
+    if (!blocks) return NULL;
+
+    for (size_t i = 0; i < count; ++i) {
+        if (!blocks[i].internalName) continue;
+        if (strcmp(blocks[i].internalName, internal_name) != 0) continue;
+
+        size_t actual = 0;
+        void* ptr = core->getMemoryBlock(core, blocks[i].id, &actual);
+        if (!ptr) return NULL;
+        if (size_out) *size_out = actual;
+        return ptr;
+    }
+    return NULL;
 }

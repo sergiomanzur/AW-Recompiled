@@ -1,0 +1,68 @@
+#include "aw/probe/backend_mgba.hpp"
+
+#include "aw/mgba_adapter.h"
+
+#include <iostream>
+
+namespace aw {
+
+namespace {
+constexpr std::size_t kOamBytes = 1024;
+}
+
+void MgbaProbeBackend::set_core(void* core) {
+  core_ = core;
+  resolved_ = false;
+  oam_ = nullptr;
+  ewram_ = nullptr;
+  ewram_size_ = 0;
+}
+
+void MgbaProbeBackend::resolve() {
+  if (resolved_ || core_ == nullptr) return;
+  resolved_ = true;
+
+  auto* core = static_cast<struct mCore*>(core_);
+
+  std::size_t oam_size = 0;
+  void* oam_ptr = aw_mgba_memory_block(core, "oam", &oam_size);
+  if (oam_ptr != nullptr && oam_size >= kOamBytes) {
+    oam_ = static_cast<const std::uint8_t*>(oam_ptr);
+  }
+
+  std::size_t ewram_size = 0;
+  void* ewram_ptr = aw_mgba_memory_block(core, "wram", &ewram_size);
+  if (ewram_ptr != nullptr && ewram_size > 0) {
+    ewram_ = static_cast<const std::uint8_t*>(ewram_ptr);
+    ewram_size_ = ewram_size;
+  }
+
+  if (oam_ == nullptr || ewram_ == nullptr) {
+    std::cerr << "[probe] mGBA memory blocks unavailable (oam="
+              << (oam_ != nullptr) << ", wram=" << (ewram_ != nullptr)
+              << "); pointer navigation disabled\n";
+  }
+}
+
+bool MgbaProbeBackend::available() {
+  resolve();
+  return oam_ != nullptr && ewram_ != nullptr;
+}
+
+const std::uint8_t* MgbaProbeBackend::oam() {
+  resolve();
+  return oam_;
+}
+
+const std::uint8_t* MgbaProbeBackend::ewram(std::size_t& size_out) {
+  resolve();
+  size_out = ewram_size_;
+  return ewram_;
+}
+
+std::uint16_t MgbaProbeBackend::read_io16(std::uint32_t addr) {
+  if (core_ == nullptr) return 0;
+  return aw_mgba_read16(static_cast<struct mCore*>(core_), addr);
+}
+
+}  // namespace aw

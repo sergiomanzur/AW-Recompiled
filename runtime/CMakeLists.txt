@@ -29,6 +29,7 @@ add_library(aw_runtime STATIC
   src/input/viewport.cpp
   src/memory.cpp
   src/ppu.cpp
+  src/probe/backend_mgba.cpp
   src/rom.cpp
   src/window.cpp
   src/mgba_adapter.c
