@@ -81,10 +81,14 @@ void tests_viewport_rejects_outside_and_offsets() {
   require_equal(aw::viewport_to_gba(150, 0, 1620, 1080, 149, 500, gx, gy), false, "left of viewport");
   require_equal(aw::viewport_to_gba(150, 0, 1620, 1080, 1770, 500, gx, gy), false, "right of viewport");
   require_equal(aw::viewport_to_gba(150, 0, 1620, 1080, 500, -1, gx, gy), false, "above viewport");
+  require_equal(aw::viewport_to_gba(150, 0, 1620, 1080, 500, 1080, gx, gy), false, "below viewport");
 
   require_equal(aw::viewport_to_gba(150, 0, 1620, 1080, 150, 0, gx, gy), true, "viewport origin");
   require_equal(gx, 0, "offset origin x");
   require_equal(gy, 0, "offset origin y");
+
+  require_equal(aw::viewport_to_gba(150, 0, 1620, 1080, 500, 1079, gx, gy), true, "last row inside");
+  require_equal(gy, 159, "last row maps to bottom scanline");
 }
 
 void tests_viewport_rejects_degenerate() {
