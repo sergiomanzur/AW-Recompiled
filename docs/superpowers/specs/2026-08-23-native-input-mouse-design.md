@@ -241,9 +241,15 @@ runtime, so a stale symbol file degrades rather than misbehaves.
 
 ## Symbol Mining
 
-`data/symbols/<rom-sha1>.json` holds the mined data, keyed by ROM SHA-1 so a
+`data/symbols/<rom-sha1>.ini` holds the mined data, keyed by ROM SHA-1 so a
 different revision cannot silently load the wrong offsets. Absent or mismatched,
-the runtime falls back to correlation-only tracking and click-only steering.
+the runtime falls back to correlation-only tracking, which still steers — the
+symbol table is a refinement (faster lock-on, and suppressing steering during
+cutscenes), not a prerequisite.
+
+INI rather than JSON because the project already ships `aw::ConfigFile` for
+`config.ini` and has no JSON dependency; adding one for a single small data file
+is not worth it. Schema in `data/symbols/README.md`.
 
 The miner is offline and deterministic:
 
@@ -259,8 +265,8 @@ The miner is offline and deterministic:
 
 | Condition | Behaviour |
 |---|---|
-| No symbol file, or ROM SHA-1 mismatch | Correlation-only tracking; steering disabled; clicks still work |
-| `ContextId::Unknown` | Clicks only |
+| No symbol file, or ROM SHA-1 mismatch | Correlation-only tracking; steering still enabled; clicks still work |
+| `ContextId::Unknown` | Correlation-only tracking; steering still enabled |
 | Indicator not found in OAM | Treated as `Unknown` for that frame; no steering, no crash |
 | Pointer outside game viewport | Steering disarmed; click edges still tracked so a release outside is not lost |
 | `getMemoryBlock` unavailable | `ProbeBackend` reports unavailable; whole pointer-nav feature disables itself and logs once |
