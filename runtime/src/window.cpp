@@ -1,5 +1,7 @@
 #include "aw/window.hpp"
 
+#include "aw/input/viewport.hpp"
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -717,15 +719,7 @@ std::string Window::open_file_dialog(void* parent_hwnd) {
 
 bool Window::client_to_gba(int client_x, int client_y, int& gba_x, int& gba_y) const {
   const ViewportRect& vp = cached_viewport_;
-  if (vp.width <= 0 || vp.height <= 0) return false;
-  if (client_x < vp.x || client_x >= vp.x + vp.width) return false;
-  if (client_y < vp.y || client_y >= vp.y + vp.height) return false;
-
-  gba_x = ((client_x - vp.x) * 240) / vp.width;
-  gba_y = ((client_y - vp.y) * 160) / vp.height;
-  gba_x = std::clamp(gba_x, 0, 239);
-  gba_y = std::clamp(gba_y, 0, 159);
-  return true;
+  return viewport_to_gba(vp.x, vp.y, vp.width, vp.height, client_x, client_y, gba_x, gba_y);
 }
 
 bool Window::process_events(Hardware& hardware) {

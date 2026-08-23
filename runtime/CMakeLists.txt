@@ -26,6 +26,7 @@ add_library(aw_runtime STATIC
   src/cpu_state.cpp
   src/hardware.cpp
   src/input_config.cpp
+  src/input/viewport.cpp
   src/memory.cpp
   src/ppu.cpp
   src/rom.cpp
@@ -189,6 +190,19 @@ target_include_directories(window_aspect_tests PRIVATE
 target_link_libraries(window_aspect_tests PRIVATE aw_runtime)
 
 add_test(NAME window_aspect_tests COMMAND window_aspect_tests)
+
+add_executable(input_core_tests
+  tests/input_core_tests.cpp
+)
+
+target_include_directories(input_core_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
+)
+
+target_link_libraries(input_core_tests PRIVATE aw_runtime)
+
+add_test(NAME input_core_tests COMMAND input_core_tests)
 
 add_executable(advance-wars-native
   src/main.cpp
