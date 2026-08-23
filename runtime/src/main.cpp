@@ -7,6 +7,8 @@
 #include "aw/generated_blocks.hpp"
 #include "aw/hardware.hpp"
 #include "aw/ppu.hpp"
+#include "aw/probe/backend_mgba.hpp"
+#include "aw/probe/oam.hpp"
 #include "aw/rom.hpp"
 #include "aw/window.hpp"
 
@@ -77,6 +79,7 @@ struct Options {
   bool play_enabled = true;
   bool is_double_click = false;
   int max_frames = 0;  // 0 = unlimited (interactive play)
+  std::string oam_log_path;  // Non-empty enables per-frame OAM delta logging
 };
 
 Options parse_options(int argc, char** argv) {
@@ -94,6 +97,10 @@ Options parse_options(int argc, char** argv) {
       options.max_frames = (std::max)(0, std::stoi(arg.substr(9)));
     } else if (arg == "--frames" && i + 1 < argc) {
       options.max_frames = (std::max)(0, std::stoi(argv[++i]));
+    } else if (arg.rfind("--oam-log=", 0) == 0) {
+      options.oam_log_path = arg.substr(10);
+    } else if (arg == "--oam-log" && i + 1 < argc) {
+      options.oam_log_path = argv[++i];
     } else {
       positional.push_back(arg);
     }
@@ -142,7 +149,8 @@ Options parse_options(int argc, char** argv) {
   return options;
 }
 
-void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_frames) {
+void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_frames,
+                   const std::string& oam_log_path) {
   try {
     auto ppu_ptr = std::make_unique<aw::Ppu>();
     auto& ppu = *ppu_ptr;
@@ -160,6 +168,14 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
     struct mCore* core = aw_mgba_create(rom_path.string().c_str(), mgba_buffer.data(), 240);
     if (!core) {
       throw std::runtime_error("aw_mgba_create failed for ROM: " + rom_path.string());
+    }
+
+    aw::MgbaProbeBackend probe(core);
+    std::ofstream oam_log;
+    std::vector<aw::OamEntry> oam_prev(aw::kOamEntryCount);
+    if (!oam_log_path.empty()) {
+      oam_log.open(oam_log_path);
+      oam_log << "# frame keys index dx dy x y tile palette\n";
     }
 
     const unsigned core_sample_rate = aw_mgba_audio_sample_rate(core);
@@ -219,6 +235,24 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       // Render frame to window
       window.render(ppu);
 
+      if (oam_log.is_open()) {
+        const std::uint8_t* oam_bytes = probe.oam();
+        if (oam_bytes != nullptr) {
+          for (std::size_t i = 0; i < aw::kOamEntryCount; ++i) {
+            const aw::OamEntry cur = aw::decode_oam_entry(oam_bytes, i);
+            const aw::OamEntry& prev = oam_prev[i];
+            const int dx = cur.x - prev.x;
+            const int dy = cur.y - prev.y;
+            if (cur.on_screen() && prev.on_screen() && (dx != 0 || dy != 0)) {
+              oam_log << frames_run << ' ' << hardware.keys_pressed << ' ' << i << ' '
+                      << dx << ' ' << dy << ' ' << cur.x << ' ' << cur.y << ' '
+                      << cur.tile << ' ' << cur.palette << '\n';
+            }
+            oam_prev[i] = cur;
+          }
+        }
+      }
+
       // High-precision steady frame pacing for locked 60 FPS
       next_frame_time += frame_duration_ns;
       const auto now = clock::now();
@@ -258,7 +292,7 @@ int main(int argc, char** argv) {
     aw::RomImage rom = aw::load_rom_file(options.rom_path);
 
     if (options.play_enabled) {
-      run_game_loop(options.rom_path, rom, options.max_frames);
+      run_game_loop(options.rom_path, rom, options.max_frames, options.oam_log_path);
     }
   } catch (const std::exception& e) {
     std::cerr << "Fatal error: " << e.what() << std::endl;

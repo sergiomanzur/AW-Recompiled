@@ -1,14 +1,11 @@
 #include "aw/probe/backend_mgba.hpp"
 
 #include "aw/mgba_adapter.h"
+#include "aw/probe/oam.hpp"
 
 #include <iostream>
 
 namespace aw {
-
-namespace {
-constexpr std::size_t kOamBytes = 1024;
-}
 
 void MgbaProbeBackend::set_core(void* core) {
   core_ = core;
@@ -26,7 +23,7 @@ void MgbaProbeBackend::resolve() {
 
   std::size_t oam_size = 0;
   void* oam_ptr = aw_mgba_memory_block(core, "oam", &oam_size);
-  if (oam_ptr != nullptr && oam_size >= kOamBytes) {
+  if (oam_ptr != nullptr && oam_size >= aw::kOamBytes) {
     oam_ = static_cast<const std::uint8_t*>(oam_ptr);
   }
 
