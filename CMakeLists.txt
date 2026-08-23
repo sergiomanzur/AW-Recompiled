@@ -15,5 +15,7 @@ set(BUILD_GL OFF CACHE BOOL "" FORCE)
 set(BUILD_GLES2 OFF CACHE BOOL "" FORCE)
 set(BUILD_GLES3 OFF CACHE BOOL "" FORCE)
 
+enable_testing()
+
 add_subdirectory(third-party/mgba)
 add_subdirectory(runtime)
