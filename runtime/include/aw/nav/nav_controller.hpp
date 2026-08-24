@@ -41,6 +41,21 @@ public:
   // emulator. Call once per frame, after the input sources have polled.
   std::uint16_t update(const InputFrame& frame);
 
+  // --- Hidden-frame burst API ---
+  //
+  // After the caller runs the emulator frame for update()'s keys, it must
+  // check bursting() in a loop.  While true, call burst_step() to get the
+  // keys for the next hidden frame, run the emulator with those keys
+  // (without rendering), drain audio, and repeat.
+  //
+  // burst_step() reads the cursor tile live from the backend after each
+  // emulator frame the caller ran, so it self-terminates when the cursor
+  // arrives at the target.  It emits raw D-pad keys in an alternating
+  // press/release pattern (bypassing PointerNav) that matches the timing
+  // the game expects.
+  bool bursting() const { return burst_remaining_ > 0; }
+  std::uint16_t burst_step();
+
   ContextId context() const { return context_; }
 
   // The tracker's current view of the game's selection indicator. `.found`
@@ -87,6 +102,30 @@ private:
   // cleared when the pointer leaves the viewport, disappears, a physical
   // D-pad is held, or on reset(). See update() for the full rationale.
   bool pointer_armed_ = false;
+
+  // --- Hidden-frame burst state ---
+  //
+  // The burst bypasses PointerNav entirely: it emits raw D-pad keys in a
+  // press/release/settle pattern, re-reading the cursor tile from the
+  // backend each press frame so it self-terminates when the cursor reaches
+  // the target.
+  int burst_target_x_ = 0;   // Target tile coordinates for the current burst
+  int burst_target_y_ = 0;
+  int burst_remaining_ = 0;  // Hidden frames left; 0 = not bursting
+  int burst_phase_ = 0;      // 0 = press, 1 = release, 2..3 = settle
+  std::uint16_t burst_dir_ = 0;  // D-pad key being held during this step
+  int prev_step_tile_x_ = 0;
+  int prev_step_tile_y_ = 0;
+  bool has_prev_step_tile_ = false;
+
+  // Hard ceiling on hidden frames per burst to bound computation time.
+  // Each tile step costs 4 frames (press + release + 2 settle), and the
+  // worst-case map is 14+9 = 23 tile steps = 92 frames.
+  static constexpr int kMaxBurstFrames = 100;
+
+  // Frames per tile step: 1 press + 1 release + 2 settle, matching the
+  // timing the cursor miner proved works for this game.
+  static constexpr int kBurstFramesPerStep = 4;
 
   // AW_NAV_DEBUG=1 logs a one-line status roughly once per second. Kept in
   // the shipped binary, off by default: a real run can be diagnosed without

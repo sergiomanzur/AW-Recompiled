@@ -25,6 +25,7 @@ add_library(aw_runtime STATIC
   src/cpu_interpreter.cpp
   src/cpu_state.cpp
   src/hardware.cpp
+  src/hd_audio.cpp
   src/input_config.cpp
   src/input/source_win32.cpp
   src/input/viewport.cpp
@@ -37,8 +38,10 @@ add_library(aw_runtime STATIC
   src/probe/cursor_probe.cpp
   src/probe/oam.cpp
   src/probe/oam_tracker.cpp
+  src/render/hud_overlay.cpp
   src/render/pointer_overlay.cpp
   src/rom.cpp
+  src/tactical_intel.cpp
   src/window.cpp
   src/mgba_adapter.c
   ${AW_GENERATED_SOURCE}

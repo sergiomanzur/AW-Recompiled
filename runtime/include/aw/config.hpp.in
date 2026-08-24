@@ -1,3 +1,4 @@
 #pragma once
 
 #define AW_DEFAULT_ROM_PATH "@AW_TEST_ROM_PATH@"
+#define AW_DATA_DIR "@PROJECT_SOURCE_DIR@/data"

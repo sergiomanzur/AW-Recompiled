@@ -28,7 +28,7 @@ const char* gba_button_name(GbaButton btn) {
 
 void InputMapping::reset_to_defaults() {
   controller_index = 0;
-  mouse_enabled = true;
+  mouse_enabled = false;
 
   // Defaults: Keyboard
   bindings[Gba_A].key_vk      = 'Z';

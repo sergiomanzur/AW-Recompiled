@@ -54,12 +54,21 @@ public:
 
   void set_aspect_ratio(AspectRatio ratio);
   AspectRatio aspect_ratio() const { return aspect_ratio_; }
+  bool is_widescreen() const {
+    return aspect_ratio_ == AspectRatio::Ratio_16_9 ||
+           aspect_ratio_ == AspectRatio::Ratio_21_9 ||
+           aspect_ratio_ == AspectRatio::Ratio_21_10;
+  }
 
   void set_internal_resolution(InternalResolution res);
   InternalResolution internal_resolution() const { return internal_resolution_; }
 
   void set_video_filter(VideoFilter filter);
   VideoFilter video_filter() const { return video_filter_; }
+
+  bool show_hud() const { return show_hud_; }
+  void set_show_hud(bool show);
+  void toggle_hud() { set_show_hud(!show_hud_); }
 
   void resize_client(int width, int height);
 
@@ -74,13 +83,18 @@ public:
   bool has_pending_rom() const { return !pending_rom_path_.empty(); }
   std::string consume_pending_rom();
 
-  // Returns the pending savestate filename requested via the F5 hotkey (see
-  // process_events), or empty if none. Move-and-clear: consuming it clears
-  // the pending request.
-  std::string consume_savestate_request();
+  // Savestate management
+  bool has_pending_save_state() const { return !pending_save_state_path_.empty(); }
+  bool has_pending_load_state() const { return !pending_load_state_path_.empty(); }
+  std::string consume_pending_save_state();
+  std::string consume_pending_load_state();
+  void request_save_state(const std::string& path) { pending_save_state_path_ = path; }
+  void request_load_state(const std::string& path) { pending_load_state_path_ = path; }
 
-  // Launches native Windows File Open Dialog for selecting a .gba ROM file
+  // File dialog helpers
   static std::string open_file_dialog(void* parent_hwnd = nullptr);
+  static std::string open_savestate_dialog(void* parent_hwnd = nullptr);
+  static std::string save_savestate_dialog(void* parent_hwnd = nullptr);
 
   void set_pending_rom(const std::string& path) { pending_rom_path_ = path; }
 
@@ -99,9 +113,13 @@ private:
   AspectRatio aspect_ratio_ = AspectRatio::Original_3_2;
   InternalResolution internal_resolution_ = InternalResolution::Native;
   VideoFilter video_filter_ = VideoFilter::NearestNeighbor;
+  bool show_hud_ = true;
+  bool f2_key_was_down_ = false;
   std::string pending_rom_path_;
-  std::string savestate_request_;
-  bool savestate_key_was_down_ = false;
+  std::string pending_save_state_path_;
+  std::string pending_load_state_path_;
+  bool f5_key_was_down_ = false;
+  bool f9_key_was_down_ = false;
 
   InputMapping input_mapping_;
 

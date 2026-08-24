@@ -7,11 +7,14 @@
 #include "aw/generated_blocks.hpp"
 #include "aw/hardware.hpp"
 #include "aw/nav/nav_controller.hpp"
+#include "aw/hd_audio.hpp"
 #include "aw/ppu.hpp"
 #include "aw/probe/backend_mgba.hpp"
 #include "aw/probe/oam.hpp"
+#include "aw/render/hud_overlay.hpp"
 #include "aw/render/pointer_overlay.hpp"
 #include "aw/rom.hpp"
+#include "aw/tactical_intel.hpp"
 #include "aw/window.hpp"
 
 #include <algorithm>
@@ -182,6 +185,11 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
     nav.set_backend(probe);
     nav.load_symbols(aw::sha1_hex(rom.bytes));
 
+    aw::TacticalIntel intel;
+    aw::HdAudioEngine hd_audio;
+    bool show_hud = true;
+    bool f2_was_down = false;
+
     std::ofstream oam_log;
     std::vector<aw::OamEntry> oam_prev(aw::kOamEntryCount);
     if (!oam_log_path.empty()) {
@@ -224,16 +232,29 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         break;
       }
 
-      const std::string savestate_request = window.consume_savestate_request();
-      if (!savestate_request.empty()) {
-        if (aw_mgba_save_state(core, savestate_request.c_str())) {
-          std::cout << "Saved state: " << savestate_request << std::endl;
+      // Process pending Save State request
+      const std::string save_request = window.consume_pending_save_state();
+      if (!save_request.empty()) {
+        if (aw_mgba_save_state(core, save_request.c_str())) {
+          std::cout << "Successfully saved state to: " << save_request << std::endl;
         } else {
-          std::cerr << "Failed to save state: " << savestate_request << std::endl;
+          std::cerr << "Failed to save state to: " << save_request << std::endl;
         }
       }
 
-      hardware.keys_pressed |= nav.update(window.input_frame());
+      // Process pending Load State request
+      const std::string load_request = window.consume_pending_load_state();
+      if (!load_request.empty()) {
+        if (aw_mgba_load_state(core, load_request.c_str())) {
+          std::cout << "Successfully loaded state from: " << load_request << std::endl;
+        } else {
+          std::cerr << "Failed to load state from: " << load_request << std::endl;
+        }
+      }
+
+      // Update native C++ Tactical Intel & HD Audio Engine
+      intel.update(probe, nav.context());
+      hd_audio.update(probe);
 
       aw_mgba_run_frame(core, hardware.keys_pressed);
       frames_run++;
@@ -244,14 +265,15 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         audio.set_sample_rate(current_rate);
       }
 
-      // Read audio samples from mGBA core
+      // Read audio samples from mGBA core and process through HD Audio Engine
       const std::size_t samples_read = aw_mgba_read_audio(core, audio_samples.data(), audio_samples.size() / 2);
       if (samples_read > 0) {
+        hd_audio.mix_audio(audio_samples.data(), samples_read);
         audio.push_samples(audio_samples.data(), samples_read);
         total_audio_samples += samples_read;
       }
 
-      // Update PPU framebuffer from mGBA video buffer with proper R/B channel mapping for Win32 GDI
+      // Copy mGBA video buffer to PPU framebuffer with R/B channel swapping for Win32 GDI
       const std::uint32_t* src_buf = mgba_buffer.data();
       std::uint32_t* dst_buf = ppu.framebuffer.data();
       for (std::size_t i = 0; i < 240 * 160; ++i) {
@@ -259,16 +281,9 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         dst_buf[i] = ((c & 0x000000FF) << 16) | (c & 0x0000FF00) | ((c & 0x00FF0000) >> 16);
       }
 
-      // Draw the free-floating mouse pointer into our own framebuffer copy
-      // (never into mGBA's VRAM/OAM) at the GBA-space coordinates the mouse
-      // is aiming at. This runs before window.render() so the pointer scales
-      // and letterboxes with the game at every internal resolution, exactly
-      // like everything else in ppu.framebuffer.
-      if (const aw::PointerState* pointer = window.input_frame().primary_pointer()) {
-        if (pointer->kind != aw::PointerKind::None && pointer->in_viewport) {
-          aw::draw_pointer(ppu.framebuffer.data(), aw::kGbaWidth, aw::kGbaHeight,
-                            pointer->gba_x, pointer->gba_y);
-        }
+      // Draw pixel-perfect C++ Tactical Intel HUD overlay if enabled
+      if (window.show_hud()) {
+        aw::draw_hud_overlay(ppu.framebuffer.data(), ppu.width, ppu.height, intel, false);
       }
 
       // Render frame to window

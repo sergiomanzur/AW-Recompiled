@@ -1,5 +1,6 @@
 #include "aw/nav/nav_controller.hpp"
 
+#include "aw/config.hpp"
 #include "aw/hardware.hpp"
 #include "aw/probe/cursor_probe.hpp"
 
@@ -55,10 +56,18 @@ void NavController::reset() {
   indicator_ = {};
   last_emitted_dpad_ = 0;
   pointer_armed_ = false;
+  burst_target_x_ = 0;
+  burst_target_y_ = 0;
+  burst_remaining_ = 0;
+  burst_phase_ = 0;
+  burst_dir_ = 0;
+  prev_step_tile_x_ = 0;
+  prev_step_tile_y_ = 0;
+  has_prev_step_tile_ = false;
 }
 
 void NavController::load_symbols(const std::string& rom_sha1) {
-  const std::string path = "data/symbols/" + to_lower(rom_sha1) + ".ini";
+  const std::string path = std::string(AW_DATA_DIR) + "/symbols/" + to_lower(rom_sha1) + ".ini";
   SymbolTable table;
   std::string err;
   if (!table.load_from_file(path, err)) {
@@ -244,6 +253,31 @@ std::uint16_t NavController::update(const InputFrame& frame) {
 
   const NavOutput out = nav_.step(in);
 
+  // Hidden-frame burst initialization.  In exact mode, when the pointer is armed
+  // and steering, we know both the cursor's current tile and the target tile
+  // exactly.  If they differ by more than 1 tile step, we prepare a burst
+  // for the caller (main.cpp) to run hidden emulator frames until the cursor
+  // reaches the target.
+  burst_remaining_ = 0;
+  has_prev_step_tile_ = false;
+
+  if (exact_mode && pointer_armed_ && steerable && cursor_tile.found) {
+    const int dx_tiles = std::abs(debug_frame.target_tile_x - cursor_tile.x);
+    const int dy_tiles = std::abs(debug_frame.target_tile_y - cursor_tile.y);
+    const int total_steps = dx_tiles + dy_tiles;
+    if (total_steps > 1) {
+      burst_target_x_ = debug_frame.target_tile_x;
+      burst_target_y_ = debug_frame.target_tile_y;
+      // Frame 0 (this frame) already emitted step 1's press key via nav_.step(in).
+      // So the burst starts on step 1's release phase (phase 1).
+      burst_phase_ = 1;
+      burst_remaining_ = std::min((total_steps - 1) * kBurstFramesPerStep + (kBurstFramesPerStep - 1), kMaxBurstFrames);
+      prev_step_tile_x_ = cursor_tile.x;
+      prev_step_tile_y_ = cursor_tile.y;
+      has_prev_step_tile_ = true;
+    }
+  }
+
   // OamTracker's wildcard correlation locks onto "the sprite that keeps
   // moving the way the D-pad was pressed" -- but PointerNav only emits
   // D-pad bits once it already has a lock (its indicator_found gate in
@@ -291,6 +325,65 @@ void NavController::debug_log(const NavInput& in, const NavOutput& out, const De
             << " keys=0x" << std::hex << out.keys << std::dec
             << " phase(x=" << nav_.x_phase_name() << ",y=" << nav_.y_phase_name() << ")"
             << "\n";
+}
+
+std::uint16_t NavController::burst_step() {
+  if (burst_remaining_ <= 0 || backend_ == nullptr || !backend_->available()) {
+    burst_remaining_ = 0;
+    return 0;
+  }
+
+  if (burst_phase_ == 0) {
+    const CursorTile cur = read_cursor_tile(*backend_, context_probe_.table().cursor);
+    if (!cur.found) {
+      burst_remaining_ = 0;
+      return 0;
+    }
+
+    const int dx = burst_target_x_ - cur.x;
+    const int dy = burst_target_y_ - cur.y;
+    if (dx == 0 && dy == 0) {
+      burst_remaining_ = 0;
+      return 0;
+    }
+
+    if (has_prev_step_tile_ && cur.x == prev_step_tile_x_ && cur.y == prev_step_tile_y_) {
+      // Cursor did not move after the previous step (e.g. hit map boundary).
+      burst_remaining_ = 0;
+      return 0;
+    }
+
+    prev_step_tile_x_ = cur.x;
+    prev_step_tile_y_ = cur.y;
+    has_prev_step_tile_ = true;
+
+    if (dx != 0) {
+      burst_dir_ = (dx > 0) ? kKeyRight : kKeyLeft;
+    } else {
+      burst_dir_ = (dy > 0) ? kKeyDown : kKeyUp;
+    }
+
+    burst_phase_ = 1;
+    burst_remaining_--;
+    return burst_dir_;
+  }
+
+  if (burst_phase_ == 1) {
+    burst_phase_ = 2;
+    burst_remaining_--;
+    return 0;
+  }
+
+  if (burst_phase_ == 2) {
+    burst_phase_ = 3;
+    burst_remaining_--;
+    return 0;
+  }
+
+  // burst_phase_ == 3
+  burst_phase_ = 0;
+  burst_remaining_--;
+  return 0;
 }
 
 }  // namespace aw

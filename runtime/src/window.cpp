@@ -66,6 +66,20 @@ namespace {
 
 constexpr UINT IDM_FILE_OPEN            = 1001;
 constexpr UINT IDM_FILE_EXIT            = 1002;
+constexpr UINT IDM_FILE_SAVE_QUICK      = 1003;
+constexpr UINT IDM_FILE_LOAD_QUICK      = 1004;
+constexpr UINT IDM_FILE_SAVE_AS         = 1005;
+constexpr UINT IDM_FILE_LOAD_FROM       = 1006;
+constexpr UINT IDM_SAVE_SLOT_1          = 1011;
+constexpr UINT IDM_SAVE_SLOT_2          = 1012;
+constexpr UINT IDM_SAVE_SLOT_3          = 1013;
+constexpr UINT IDM_SAVE_SLOT_4          = 1014;
+constexpr UINT IDM_SAVE_SLOT_5          = 1015;
+constexpr UINT IDM_LOAD_SLOT_1          = 1021;
+constexpr UINT IDM_LOAD_SLOT_2          = 1022;
+constexpr UINT IDM_LOAD_SLOT_3          = 1023;
+constexpr UINT IDM_LOAD_SLOT_4          = 1024;
+constexpr UINT IDM_LOAD_SLOT_5          = 1025;
 constexpr UINT IDM_ASPECT_3_2           = 2001;
 constexpr UINT IDM_ASPECT_4_3           = 2002;
 constexpr UINT IDM_ASPECT_16_9          = 2003;
@@ -81,6 +95,7 @@ constexpr UINT IDM_FILTER_BILINEAR      = 2202;
 constexpr UINT IDM_FILTER_SCALE2X        = 2203;
 constexpr UINT IDM_SETTINGS_SELECT_ROM  = 3001;
 constexpr UINT IDM_SETTINGS_CONTROLS    = 3002;
+constexpr UINT IDM_SETTINGS_TOGGLE_HUD  = 3003;
 constexpr UINT IDM_HELP_CONTROLS        = 4001;
 constexpr UINT IDM_HELP_ABOUT           = 4002;
 
@@ -272,6 +287,24 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
           config.load("config.ini");
           win->save_config(config);
         }
+      } else if (id == IDM_FILE_SAVE_QUICK) {
+        if (win != nullptr) win->request_save_state("state_0.ss");
+      } else if (id == IDM_FILE_LOAD_QUICK) {
+        if (win != nullptr) win->request_load_state("state_0.ss");
+      } else if (id == IDM_FILE_SAVE_AS) {
+        if (win != nullptr) {
+          std::string path = Window::save_savestate_dialog(hwnd);
+          if (!path.empty()) win->request_save_state(path);
+        }
+      } else if (id == IDM_FILE_LOAD_FROM) {
+        if (win != nullptr) {
+          std::string path = Window::open_savestate_dialog(hwnd);
+          if (!path.empty()) win->request_load_state(path);
+        }
+      } else if (id >= IDM_SAVE_SLOT_1 && id <= IDM_SAVE_SLOT_5) {
+        if (win != nullptr) win->request_save_state("state_" + std::to_string(id - IDM_SAVE_SLOT_1 + 1) + ".ss");
+      } else if (id >= IDM_LOAD_SLOT_1 && id <= IDM_LOAD_SLOT_5) {
+        if (win != nullptr) win->request_load_state("state_" + std::to_string(id - IDM_LOAD_SLOT_1 + 1) + ".ss");
       } else if (id == IDM_FILE_EXIT) {
         PostQuitMessage(0);
       } else if (id >= IDM_ASPECT_3_2 && id <= IDM_ASPECT_STRETCH) {
@@ -314,6 +347,13 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
       } else if (id == IDM_SETTINGS_CONTROLS || id == IDM_HELP_CONTROLS) {
         if (win != nullptr) {
           win->show_controls_dialog();
+        }
+      } else if (id == IDM_SETTINGS_TOGGLE_HUD) {
+        if (win != nullptr) {
+          win->toggle_hud();
+          ConfigFile config;
+          config.load("config.ini");
+          win->save_config(config);
         }
       } else if (id == IDM_HELP_ABOUT) {
         MessageBoxA(hwnd,
@@ -364,6 +404,8 @@ Window::Window(int width, int height, const char* title)
   // Consolidated Win32 Menu Bar
   HMENU hMenuBar = CreateMenu();
   HMENU hFileMenu = CreatePopupMenu();
+  HMENU hSaveSlotMenu = CreatePopupMenu();
+  HMENU hLoadSlotMenu = CreatePopupMenu();
   HMENU hDisplayMenu = CreatePopupMenu();
   HMENU hAspectSubMenu = CreatePopupMenu();
   HMENU hResSubMenu = CreatePopupMenu();
@@ -371,8 +413,28 @@ Window::Window(int width, int height, const char* title)
   HMENU hSettingsMenu = CreatePopupMenu();
   HMENU hHelpMenu = CreatePopupMenu();
 
+  // Save / Load State Submenus
+  AppendMenuA(hSaveSlotMenu, MF_STRING, IDM_SAVE_SLOT_1, "Save Slot &1\tCtrl+F1");
+  AppendMenuA(hSaveSlotMenu, MF_STRING, IDM_SAVE_SLOT_2, "Save Slot &2\tCtrl+F2");
+  AppendMenuA(hSaveSlotMenu, MF_STRING, IDM_SAVE_SLOT_3, "Save Slot &3\tCtrl+F3");
+  AppendMenuA(hSaveSlotMenu, MF_STRING, IDM_SAVE_SLOT_4, "Save Slot &4\tCtrl+F4");
+  AppendMenuA(hSaveSlotMenu, MF_STRING, IDM_SAVE_SLOT_5, "Save Slot &5\tCtrl+F5");
+
+  AppendMenuA(hLoadSlotMenu, MF_STRING, IDM_LOAD_SLOT_1, "Load Slot &1\tShift+F1");
+  AppendMenuA(hLoadSlotMenu, MF_STRING, IDM_LOAD_SLOT_2, "Load Slot &2\tShift+F2");
+  AppendMenuA(hLoadSlotMenu, MF_STRING, IDM_LOAD_SLOT_3, "Load Slot &3\tShift+F3");
+  AppendMenuA(hLoadSlotMenu, MF_STRING, IDM_LOAD_SLOT_4, "Load Slot &4\tShift+F4");
+  AppendMenuA(hLoadSlotMenu, MF_STRING, IDM_LOAD_SLOT_5, "Load Slot &5\tShift+F5");
+
   // File Menu
-  AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_OPEN, "&Open ROM...\tCtrl+O");
+  AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_OPEN, "&Open GBA ROM...\tCtrl+O");
+  AppendMenuA(hFileMenu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_SAVE_QUICK, "Quick &Save State\tF5");
+  AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_LOAD_QUICK, "Quick &Load State\tF9");
+  AppendMenuA(hFileMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSaveSlotMenu), "&Save State Slot");
+  AppendMenuA(hFileMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hLoadSlotMenu), "&Load State Slot");
+  AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_SAVE_AS, "Save State &As...");
+  AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_LOAD_FROM, "Load State &From...");
   AppendMenuA(hFileMenu, MF_SEPARATOR, 0, nullptr);
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_EXIT, "E&xit");
 
@@ -402,6 +464,8 @@ Window::Window(int width, int height, const char* title)
   // Settings Menu
   AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_SELECT_ROM, "Select &GBA ROM Path...");
   AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_CONTROLS, "&Configure Controls & Gamepad...");
+  AppendMenuA(hSettingsMenu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_TOGGLE_HUD, "Show &Tactical Intel HUD Overlay\tF2");
 
   // Help Menu
   AppendMenuA(hHelpMenu, MF_STRING, IDM_HELP_CONTROLS, "&Controls Info...");
@@ -460,11 +524,7 @@ std::string Window::consume_pending_rom() {
   return rom;
 }
 
-std::string Window::consume_savestate_request() {
-  std::string request = std::move(savestate_request_);
-  savestate_request_.clear();
-  return request;
-}
+
 
 void Window::set_aspect_ratio(AspectRatio ratio) {
   aspect_ratio_ = ratio;
@@ -489,13 +549,6 @@ void Window::set_internal_resolution(InternalResolution res) {
   internal_resolution_ = res;
   update_menu_checks();
 
-  switch (res) {
-    case InternalResolution::Native:   resize_client(960, 640); break;
-    case InternalResolution::Res_720p:  resize_client(1280, 720); break;
-    case InternalResolution::Res_1080p: resize_client(1920, 1080); break;
-    case InternalResolution::Res_4K:    resize_client(3840, 2160); break;
-  }
-
   if (hwnd_ != nullptr) {
     InvalidateRect(static_cast<HWND>(hwnd_), nullptr, TRUE);
   }
@@ -505,6 +558,14 @@ void Window::set_video_filter(VideoFilter filter) {
   video_filter_ = filter;
   update_menu_checks();
 
+  if (hwnd_ != nullptr) {
+    InvalidateRect(static_cast<HWND>(hwnd_), nullptr, TRUE);
+  }
+}
+
+void Window::set_show_hud(bool show) {
+  show_hud_ = show;
+  update_menu_checks();
   if (hwnd_ != nullptr) {
     InvalidateRect(static_cast<HWND>(hwnd_), nullptr, TRUE);
   }
@@ -650,10 +711,12 @@ void Window::load_config(const ConfigFile& config) {
   const int aspect = config.get_int("Display", "aspect_ratio", 0);
   const int res = config.get_int("Display", "internal_resolution", 0);
   const int filter = config.get_int("Display", "video_filter", 1);
+  const int hud = config.get_int("Display", "show_hud", 1);
 
   set_aspect_ratio(static_cast<AspectRatio>(std::clamp(aspect, 0, 5)));
   set_internal_resolution(static_cast<InternalResolution>(std::clamp(res, 0, 3)));
   set_video_filter(static_cast<VideoFilter>(std::clamp(filter, 0, 2)));
+  set_show_hud(hud != 0);
 
   input_mapping_.load_from_config(config);
 }
@@ -662,6 +725,7 @@ void Window::save_config(ConfigFile& config) const {
   config.set_int("Display", "aspect_ratio", static_cast<int>(aspect_ratio_));
   config.set_int("Display", "internal_resolution", static_cast<int>(internal_resolution_));
   config.set_int("Display", "video_filter", static_cast<int>(video_filter_));
+  config.set_int("Display", "show_hud", show_hud_ ? 1 : 0);
   if (!pending_rom_path_.empty()) {
     config.set_string("Paths", "rom_path", pending_rom_path_);
   }
@@ -702,6 +766,22 @@ void Window::update_menu_checks() {
   CheckMenuItem(hMenuBar, IDM_FILTER_NEAREST,  video_filter_ == VideoFilter::NearestNeighbor ? MF_CHECKED : MF_UNCHECKED);
   CheckMenuItem(hMenuBar, IDM_FILTER_BILINEAR, video_filter_ == VideoFilter::Bilinear        ? MF_CHECKED : MF_UNCHECKED);
   CheckMenuItem(hMenuBar, IDM_FILTER_SCALE2X,   video_filter_ == VideoFilter::Scale2x         ? MF_CHECKED : MF_UNCHECKED);
+
+  CheckMenuItem(hMenuBar, IDM_SETTINGS_TOGGLE_HUD, show_hud_ ? MF_CHECKED : MF_UNCHECKED);
+}
+
+
+
+std::string Window::consume_pending_save_state() {
+  std::string p = std::move(pending_save_state_path_);
+  pending_save_state_path_.clear();
+  return p;
+}
+
+std::string Window::consume_pending_load_state() {
+  std::string p = std::move(pending_load_state_path_);
+  pending_load_state_path_.clear();
+  return p;
 }
 
 std::string Window::open_file_dialog(void* parent_hwnd) {
@@ -716,6 +796,40 @@ std::string Window::open_file_dialog(void* parent_hwnd) {
   ofn.lpstrTitle = "Select Advance Wars ROM File";
 
   if (GetOpenFileNameA(&ofn) == TRUE) {
+    return std::string(file_name);
+  }
+  return "";
+}
+
+std::string Window::open_savestate_dialog(void* parent_hwnd) {
+  char file_name[MAX_PATH] = "";
+  OPENFILENAMEA ofn = {};
+  ofn.lStructSize = sizeof(OPENFILENAMEA);
+  ofn.hwndOwner = static_cast<HWND>(parent_hwnd);
+  ofn.lpstrFilter = "Advance Wars Save States (*.ss)\0*.ss\0All Files (*.*)\0*.*\0";
+  ofn.lpstrFile = file_name;
+  ofn.nMaxFile = MAX_PATH;
+  ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+  ofn.lpstrTitle = "Select Save State File to Load";
+
+  if (GetOpenFileNameA(&ofn) == TRUE) {
+    return std::string(file_name);
+  }
+  return "";
+}
+
+std::string Window::save_savestate_dialog(void* parent_hwnd) {
+  char file_name[MAX_PATH] = "state_0.ss";
+  OPENFILENAMEA ofn = {};
+  ofn.lStructSize = sizeof(OPENFILENAMEA);
+  ofn.hwndOwner = static_cast<HWND>(parent_hwnd);
+  ofn.lpstrFilter = "Advance Wars Save States (*.ss)\0*.ss\0All Files (*.*)\0*.*\0";
+  ofn.lpstrFile = file_name;
+  ofn.nMaxFile = MAX_PATH;
+  ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+  ofn.lpstrTitle = "Save State As...";
+
+  if (GetSaveFileNameA(&ofn) == TRUE) {
     return std::string(file_name);
   }
   return "";
@@ -743,12 +857,9 @@ bool Window::process_events(Hardware& hardware) {
 
   hardware.keys_pressed |= input_frame_.gba_keys;
 
-  // F5 hotkey: request a savestate capture to state_<N>.ss, where N is
-  // whichever digit key 0-9 is currently held (default 0 when none is).
-  // Edge-detected against the previous poll so a held F5 produces exactly
-  // one request, not one per frame.
-  const bool savestate_key_is_down = (GetAsyncKeyState(VK_F5) & 0x8000) != 0;
-  if (savestate_key_is_down && !savestate_key_was_down_) {
+  // F5 hotkey: Quick Save State
+  const bool f5_is_down = (GetAsyncKeyState(VK_F5) & 0x8000) != 0;
+  if (f5_is_down && !f5_key_was_down_) {
     int slot = 0;
     for (int digit = 0; digit <= 9; ++digit) {
       if (GetAsyncKeyState('0' + digit) & 0x8000) {
@@ -756,10 +867,36 @@ bool Window::process_events(Hardware& hardware) {
         break;
       }
     }
-    savestate_request_ = "state_" + std::to_string(slot) + ".ss";
-    std::cout << "Savestate capture requested: " << savestate_request_ << std::endl;
+    request_save_state("state_" + std::to_string(slot) + ".ss");
+    std::cout << "Quick Save State requested: state_" << slot << ".ss" << std::endl;
   }
-  savestate_key_was_down_ = savestate_key_is_down;
+  f5_key_was_down_ = f5_is_down;
+
+  // F9 hotkey: Quick Load State
+  const bool f9_is_down = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
+  if (f9_is_down && !f9_key_was_down_) {
+    int slot = 0;
+    for (int digit = 0; digit <= 9; ++digit) {
+      if (GetAsyncKeyState('0' + digit) & 0x8000) {
+        slot = digit;
+        break;
+      }
+    }
+    request_load_state("state_" + std::to_string(slot) + ".ss");
+    std::cout << "Quick Load State requested: state_" << slot << ".ss" << std::endl;
+  }
+  f9_key_was_down_ = f9_is_down;
+
+  // F2 hotkey: toggle Tactical Intel HUD overlay
+  const bool f2_is_down = (GetAsyncKeyState(VK_F2) & 0x8000) != 0;
+  if (f2_is_down && !f2_key_was_down_) {
+    toggle_hud();
+    ConfigFile config;
+    config.load("config.ini");
+    save_config(config);
+    std::cout << "Tactical Intel HUD: " << (show_hud_ ? "ENABLED" : "DISABLED") << std::endl;
+  }
+  f2_key_was_down_ = f2_is_down;
 
   return is_open_;
 }
@@ -811,19 +948,21 @@ void Window::render(const Ppu& ppu) {
   SetStretchBltMode(hdc, COLORONCOLOR);
 
   const std::uint32_t* render_data = ppu.framebuffer.data();
-  int src_w = kGbaWidth;
-  int src_h = kGbaHeight;
+  int src_w = ppu.width;
+  int src_h = ppu.height;
 
   if (video_filter_ == VideoFilter::Scale2x && !scale2x_buffer_.empty()) {
-    apply_scale2x(ppu.framebuffer.data(), scale2x_buffer_.data(), kGbaWidth, kGbaHeight);
+    scale2x_buffer_.resize((src_w * 2) * (src_h * 2));
+    apply_scale2x(ppu.framebuffer.data(), scale2x_buffer_.data(), src_w, src_h);
     render_data = scale2x_buffer_.data();
-    src_w = kGbaWidth * 2;
-    src_h = kGbaHeight * 2;
+    src_w = src_w * 2;
+    src_h = src_h * 2;
   } else if (video_filter_ == VideoFilter::Bilinear && !scale2x_buffer_.empty()) {
-    apply_bilinear_2x(ppu.framebuffer.data(), scale2x_buffer_.data(), kGbaWidth, kGbaHeight);
+    scale2x_buffer_.resize((src_w * 2) * (src_h * 2));
+    apply_bilinear_2x(ppu.framebuffer.data(), scale2x_buffer_.data(), src_w, src_h);
     render_data = scale2x_buffer_.data();
-    src_w = kGbaWidth * 2;
-    src_h = kGbaHeight * 2;
+    src_w = src_w * 2;
+    src_h = src_h * 2;
   }
 
   BITMAPINFO bmi = {};
@@ -891,8 +1030,11 @@ void Window::load_config(const ConfigFile& /*config*/) {}
 void Window::save_config(ConfigFile& /*config*/) const {}
 void Window::resize_client(int /*width*/, int /*height*/) {}
 std::string Window::consume_pending_rom() { return ""; }
-std::string Window::consume_savestate_request() { return ""; }
+std::string Window::consume_pending_save_state() { return ""; }
+std::string Window::consume_pending_load_state() { return ""; }
 std::string Window::open_file_dialog(void* /*parent_hwnd*/) { return ""; }
+std::string Window::open_savestate_dialog(void* /*parent_hwnd*/) { return ""; }
+std::string Window::save_savestate_dialog(void* /*parent_hwnd*/) { return ""; }
 void Window::update_menu_checks() {}
 
 #endif
