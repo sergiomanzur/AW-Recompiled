@@ -58,6 +58,15 @@ private:
   Indicator find_by_signature(const std::uint8_t* oam);
   void correlate(const std::uint8_t* oam, std::uint16_t emitted_dpad);
 
+  // Continuously re-checks a standing lock against the D-pad we actually
+  // commanded, independent of correlate()'s score bookkeeping (which is keyed
+  // by signature, not by the specific anchored slot, so a decoy sharing the
+  // locked signature can keep the score healthy while the anchor itself is
+  // going nowhere or moving backwards). A real cursor moves by a consistent,
+  // plausible step in the commanded direction on consecutive commanded
+  // frames; an animation that merely happened to earn the lock does not.
+  void verify_lock(const std::uint8_t* oam, std::uint16_t emitted_dpad);
+
   static constexpr int kLockScore = 3;      // Net agreements needed to lock
   static constexpr int kUnlockScore = 0;    // Score at/below this while locked breaks
                                              // the lock, so a decoy that stalls or
@@ -68,6 +77,13 @@ private:
                                              // animations), not a cursor step
   static constexpr int kMaxStepPixels = 32; // Larger jumps are not cursor steps
   static constexpr int kUnlockFrames = 60;  // Frames absent before re-locking
+  // Failure budget for verify_lock(). A wrong-direction move is unambiguous
+  // evidence this isn't the cursor -- the game never runs a selector
+  // backwards on unmodified input -- so it costs double. Sitting motionless
+  // is exactly what a *real* cursor does while the game is busy with an
+  // animation, so it costs a single point and must be forgiven far more
+  // slowly than an outright wrong turn.
+  static constexpr int kVerifyFailBudget = 12;
   static constexpr std::size_t kMaxCandidates = 32;
 
   struct Candidate {
@@ -82,6 +98,11 @@ private:
   bool locked_ = false;
   bool has_prev_ = false;
   int missing_frames_ = 0;
+  // Consecutive-commanded-frame failure budget for the standing lock; see
+  // verify_lock(). Reset to 0 on any commanded frame where the anchored
+  // sprite actually moves as commanded, and whenever a lock is
+  // (re)established.
+  int verify_fail_ = 0;
   // The OAM index that earned the current lock. A signature alone isn't
   // enough to report the right sprite: many units share tile+palette, so we
   // anchor to the specific slot that moved, and only fall back to a fresh

@@ -19,13 +19,38 @@ int PointerNav::effective_deadband(const Axis& axis) const {
   return std::max(2, axis.observed_step / 2);
 }
 
-std::uint16_t PointerNav::drive_axis(Axis& axis, int error, int world,
+const char* PointerNav::phase_name(Phase phase) {
+  switch (phase) {
+    case Phase::Idle: return "Idle";
+    case Phase::Pressing: return "Pressing";
+    case Phase::Releasing: return "Releasing";
+    case Phase::Blocked: return "Blocked";
+  }
+  return "?";
+}
+
+std::uint16_t PointerNav::drive_axis(Axis& axis, int error, int world, int target,
                                      std::uint16_t positive, std::uint16_t negative) {
+  if (target != axis.last_target) {
+    const int shift = std::abs(target - axis.last_target);
+    axis.last_target = target;
+    // The user aimed somewhere meaningfully new: whatever reversal history
+    // was piling up was in service of the *old* target and says nothing
+    // about whether this fresh attempt will converge, so it must not count
+    // against it.
+    if (shift > effective_deadband(axis)) {
+      axis.reversal_count = 0;
+      axis.has_reversal_baseline = false;
+    }
+  }
+
   // Arrived: stand down.
   if (std::abs(error) <= effective_deadband(axis)) {
     axis.phase = Phase::Idle;
     axis.dir = 0;
     axis.blocked_elapsed = 0;
+    axis.reversal_count = 0;
+    axis.has_reversal_baseline = false;
     return 0;
   }
 
@@ -47,12 +72,49 @@ std::uint16_t PointerNav::drive_axis(Axis& axis, int error, int world,
   }
 
   switch (axis.phase) {
-    case Phase::Idle:
+    case Phase::Idle: {
+      // axis.dir still holds the direction of the press this one is
+      // superseding (it's only cleared to 0 on the "arrived" path above, or
+      // on a fresh Axis), so this is the one place a reversal is visible.
+      if (axis.dir != 0 && wanted != axis.dir) {
+        const int abs_error = std::abs(error);
+        if (axis.has_reversal_baseline && abs_error >= axis.last_reversal_error) {
+          // No better off than at the last reversal: this axis is flapping,
+          // not converging.
+          ++axis.reversal_count;
+        } else {
+          // Either the very first reversal (nothing to compare against yet)
+          // or genuine progress since the last one -- convergence routinely
+          // includes one corrective overshoot-and-reverse, and that must
+          // stay allowed.
+          axis.reversal_count = 0;
+        }
+        axis.has_reversal_baseline = true;
+        axis.last_reversal_error = abs_error;
+
+        if (axis.reversal_count >= kMaxReversals) {
+          // Stop fighting itself. Reuse the existing Blocked/cooldown path
+          // rather than inventing a new terminal state, so the liveness
+          // guarantee (it always retries) still applies. axis.dir is set to
+          // `wanted` (the direction this reversal was heading), not 0: the
+          // Blocked-retry-on-direction-change check just above compares
+          // `wanted != axis.dir`, and leaving dir at 0 would make *any*
+          // nonzero wanted look like a direction change, retrying every
+          // single frame and defeating the cooldown entirely. This mirrors
+          // how the pre-existing press_frames-timeout path leaves axis.dir
+          // as whatever direction was stuck.
+          axis.phase = Phase::Blocked;
+          axis.blocked_elapsed = 0;
+          axis.dir = wanted;
+          return 0;
+        }
+      }
       axis.phase = Phase::Pressing;
       axis.dir = wanted;
       axis.press_frames = 0;
       axis.world_at_press = world;
       return wanted;
+    }
 
     case Phase::Pressing:
       if (world != axis.world_at_press) {
@@ -154,8 +216,8 @@ NavOutput PointerNav::step(const NavInput& in) {
   const int error_x = in.target_x - in.indicator_x;
   const int error_y = in.target_y - in.indicator_y;
 
-  out.keys |= drive_axis(x_, error_x, in.indicator_x + in.scroll_x, kKeyRight, kKeyLeft);
-  out.keys |= drive_axis(y_, error_y, in.indicator_y + in.scroll_y, kKeyDown, kKeyUp);
+  out.keys |= drive_axis(x_, error_x, in.indicator_x + in.scroll_x, in.target_x, kKeyRight, kKeyLeft);
+  out.keys |= drive_axis(y_, error_y, in.indicator_y + in.scroll_y, in.target_y, kKeyDown, kKeyUp);
   return out;
 }
 

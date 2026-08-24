@@ -369,6 +369,115 @@ void tests_null_oam_is_safe() {
   require_equal(ind.found, false, "null oam is not found");
 }
 
+void tests_verified_lock_stays_locked_while_moving_as_commanded() {
+  aw::OamTracker tracker;
+  OamBuffer oam;
+  int x = 0;
+  oam.place(5, x, 64, /*tile=*/0x151, /*palette=*/2);
+  tracker.update(oam.bytes.data(), 0);
+
+  // Earn the lock exactly as tests_correlation_locks_on_after_consistent_agreement.
+  for (int i = 0; i < 3; ++i) {
+    x += 16;
+    oam.place(5, x, 64, 0x151, 2);
+    tracker.update(oam.bytes.data(), aw::kKeyRight);
+  }
+  require_equal(tracker.locked(), true, "locked after the initial agreement");
+
+  // Keep obeying every single press, for well more than the 12-point
+  // verification budget could tolerate if it were (wrongly) still
+  // accumulating instead of resetting on every agreeing frame: a sprite that
+  // genuinely is the cursor must never lose its lock. (An 8 px step keeps
+  // this comfortably on the 240 px-wide screen for 20 frames; on_screen()
+  // requires x < 240.)
+  for (int i = 0; i < 20; ++i) {
+    x += 8;
+    oam.place(5, x, 64, 0x151, 2);
+    const aw::Indicator ind = tracker.update(oam.bytes.data(), aw::kKeyRight);
+    require_equal(tracker.locked(), true, "stays locked while genuinely obeying every press");
+    require_equal(ind.found, true, "still reporting a position");
+  }
+}
+
+void tests_verified_lock_drops_on_consistent_wrong_direction_within_budget() {
+  aw::OamTracker tracker;
+  OamBuffer oam;
+
+  // Entry 5 earns the lock normally.
+  int x = 32;
+  oam.place(5, x, 64, /*tile=*/0x153, /*palette=*/2);
+  tracker.update(oam.bytes.data(), 0);
+  for (int i = 0; i < 3; ++i) {
+    x += 16;
+    oam.place(5, x, 64, 0x153, 2);
+    tracker.update(oam.bytes.data(), aw::kKeyRight);
+  }
+  require_equal(tracker.locked(), true, "locked after the initial agreement");
+  require_equal(tracker.signature().tile, 0x153, "locked onto entry 5");
+
+  // From here entry 5 (the anchor) moves the WRONG way on every commanded
+  // frame. Entry 6 is a decoy sharing the exact same tile+palette that moves
+  // CORRECTLY every frame at the same time. correlate() scores candidates by
+  // signature, not by OAM index, so entry 6's +1 cancels entry 5's -1 in the
+  // very same shared candidate every frame; the net score never reaches
+  // kUnlockScore. Any drop that happens below can only be verify_lock()'s
+  // own budget at work, not the pre-existing score-decay unlock path -- this
+  // isolates the new mechanism from the old one.
+  int decoy_x = 150;
+  for (int i = 0; i < 5; ++i) {
+    x -= 16;        // entry 5 (the anchor): wrong way -- Right commanded, moves left
+    decoy_x += 16;   // entry 6 (the decoy): agrees
+    oam.place(5, x, 64, 0x153, 2);
+    oam.place(6, decoy_x, 100, 0x153, 2);
+    tracker.update(oam.bytes.data(), aw::kKeyRight);
+    require_equal(tracker.locked(), true, "under the wrong-direction budget (5 * weight 2 = 10 < 12)");
+  }
+
+  // The 6th wrong-direction frame brings the weighted total to 5*2 + 2 = 12,
+  // exhausting the budget, even though the shared candidate's score-based
+  // path (still healthy, thanks to the decoy) never would have unlocked it.
+  x -= 16;
+  decoy_x += 16;
+  oam.place(5, x, 64, 0x153, 2);
+  oam.place(6, decoy_x, 100, 0x153, 2);
+  tracker.update(oam.bytes.data(), aw::kKeyRight);
+  require_equal(tracker.locked(), false, "wrong-direction budget exhausted; lock dropped");
+}
+
+void tests_verified_lock_is_more_lenient_about_a_still_sprite_than_a_wrong_way_one() {
+  aw::OamTracker tracker;
+  OamBuffer oam;
+  int x = 32;
+  oam.place(5, x, 64, /*tile=*/0x152, /*palette=*/2);
+  tracker.update(oam.bytes.data(), 0);
+  for (int i = 0; i < 3; ++i) {
+    x += 16;
+    oam.place(5, x, 64, 0x152, 2);
+    tracker.update(oam.bytes.data(), aw::kKeyRight);
+  }
+  require_equal(tracker.locked(), true, "locked after the initial agreement");
+
+  // The game is busy (e.g. an animation) and legitimately ignores input: the
+  // locked sprite sits perfectly still even though Right keeps being
+  // commanded. dx == dy == 0 makes correlate() skip this candidate entirely
+  // (its own early `continue`), so only verify_lock()'s own budget is at
+  // work here -- and stillness must be forgiven for far longer than an
+  // outright wrong turn (which drops the lock within 6 frames, see the
+  // wrong-direction test above). At weight 1 per frame, 11 still frames
+  // (verify_fail_ = 11) must NOT be enough.
+  for (int i = 0; i < 11; ++i) {
+    oam.place(5, x, 64, 0x152, 2);  // unchanged position
+    tracker.update(oam.bytes.data(), aw::kKeyRight);
+    require_equal(tracker.locked(), true, "stillness is forgiven far longer than a wrong turn");
+  }
+
+  // The 12th still-but-commanded frame reaches the budget (12) and the lock
+  // finally drops -- it must not be forgiven forever, either.
+  oam.place(5, x, 64, 0x152, 2);
+  tracker.update(oam.bytes.data(), aw::kKeyRight);
+  require_equal(tracker.locked(), false, "eventually drops if it never resumes moving");
+}
+
 void tests_reset_clears_the_lock() {
   aw::OamTracker tracker;
   tracker.set_signature({0x040, 3});
@@ -398,6 +507,9 @@ int main() {
     tests_stale_signature_drops_then_recorrelates();
     tests_indicator_absent_is_reported_not_crashed();
     tests_null_oam_is_safe();
+    tests_verified_lock_stays_locked_while_moving_as_commanded();
+    tests_verified_lock_drops_on_consistent_wrong_direction_within_budget();
+    tests_verified_lock_is_more_lenient_about_a_still_sprite_than_a_wrong_way_one();
     tests_reset_clears_the_lock();
     std::cout << "oam_tracker_tests passed!\n";
   } catch (const std::exception& ex) {

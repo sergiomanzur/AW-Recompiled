@@ -69,6 +69,11 @@ public:
   // True while the pointer owns the D-pad.
   bool steering() const { return armed_; }
 
+  // Short, stable strings ("Idle"/"Pressing"/"Releasing"/"Blocked") for the
+  // AW_NAV_DEBUG line. Never used for control flow, only diagnostics.
+  const char* x_phase_name() const { return phase_name(x_.phase); }
+  const char* y_phase_name() const { return phase_name(y_.phase); }
+
   // Frames a blocked axis waits before retrying on its own, even if the
   // wanted direction never changes. Blocked exists to stop input spam while
   // genuinely stuck, not to give up permanently: animations and screen
@@ -76,8 +81,18 @@ public:
   // once the game becomes responsive again. ~0.5 s at 60 fps.
   static constexpr int kBlockedCooldownFrames = 30;
 
+  // Consecutive non-improving reversals an axis tolerates before it is
+  // forced into Phase::Blocked. This is the hard ceiling on how many times
+  // an axis can flip direction without making progress -- e.g. because
+  // OamTracker is watching the wrong sprite, or a screen's step size was
+  // mismeasured -- before steering stops fighting itself and backs off
+  // through the existing Blocked/cooldown path.
+  static constexpr int kMaxReversals = 3;
+
 private:
   enum class Phase : std::uint8_t { Idle, Pressing, Releasing, Blocked };
+
+  static const char* phase_name(Phase phase);
 
   struct Axis {
     Phase phase = Phase::Idle;
@@ -95,9 +110,26 @@ private:
     // value would let a large step on one axis needlessly widen the
     // deadband -- and thus the "wrong cell" error -- on the other.
     int observed_step = 0;
+
+    // Oscillation guard. Counts consecutive direction reversals (Left after
+    // Right, or vice versa) on this axis that did not come with the error
+    // shrinking since the previous reversal -- the signature of a loop that
+    // is not converging, whatever the reason (a bad indicator lock, a
+    // mismeasured step size, ...). `dir` above already records the most
+    // recently commanded direction, so a reversal is detected there; these
+    // two fields are the extra memory needed to judge "did it improve".
+    int reversal_count = 0;
+    bool has_reversal_baseline = false;
+    int last_reversal_error = 0;  // abs(error) observed at the last reversal
+
+    // The most recently seen target for this axis, used only to notice the
+    // user aiming somewhere meaningfully new (see drive_axis()), at which
+    // point past reversals stop being predictive and must not count against
+    // the fresh attempt.
+    int last_target = 0;
   };
 
-  std::uint16_t drive_axis(Axis& axis, int error, int world,
+  std::uint16_t drive_axis(Axis& axis, int error, int world, int target,
                            std::uint16_t positive, std::uint16_t negative);
 
   // The deadband ("arrived") radius for one axis: half its most recently

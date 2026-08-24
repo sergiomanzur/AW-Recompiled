@@ -11,6 +11,7 @@ void OamTracker::reset() {
   locked_ = false;
   has_prev_ = false;
   missing_frames_ = 0;
+  verify_fail_ = 0;
   locked_index_ = kOamEntryCount;
   prev_ = {};
   candidates_ = {};
@@ -20,6 +21,7 @@ void OamTracker::set_signature(const IndicatorSignature& sig) {
   signature_ = sig;
   locked_ = !sig.wildcard();
   missing_frames_ = 0;
+  verify_fail_ = 0;
   // The caller supplied a signature, not a specific slot: any anchor left
   // over from a previous correlation lock is meaningless now. find_by_
   // signature() will pick up whichever on-screen entry matches first and
@@ -132,6 +134,7 @@ void OamTracker::correlate(const std::uint8_t* oam, std::uint16_t emitted_dpad) 
       locked_ = true;
       locked_index_ = i;
       missing_frames_ = 0;
+      verify_fail_ = 0;
     } else if (locked_ && sig.tile == signature_.tile &&
                sig.palette == signature_.palette && c->score <= kUnlockScore) {
       // The sprite we anchored to has stalled or started moving the wrong
@@ -143,7 +146,62 @@ void OamTracker::correlate(const std::uint8_t* oam, std::uint16_t emitted_dpad) 
       locked_index_ = kOamEntryCount;
       candidates_ = {};
       missing_frames_ = 0;
+      verify_fail_ = 0;
     }
+  }
+}
+
+void OamTracker::verify_lock(const std::uint8_t* oam, std::uint16_t emitted_dpad) {
+  const bool right = (emitted_dpad & kKeyRight) != 0;
+  const bool left = (emitted_dpad & kKeyLeft) != 0;
+  const bool down = (emitted_dpad & kKeyDown) != 0;
+  const bool up = (emitted_dpad & kKeyUp) != 0;
+  if (!right && !left && !down && !up) return;  // Nothing commanded: no evidence.
+  if (!locked_ || !has_prev_) return;
+  if (locked_index_ >= kOamEntryCount) return;
+
+  const OamEntry cur = decode_oam_entry(oam, locked_index_);
+  const OamEntry& prev = prev_[locked_index_];
+  // The anchored slot no longer holds the sprite we locked onto, or it's
+  // gone off-screen: the separate missing/stale-signature path (in update())
+  // already handles that. Don't also charge the verification budget for it.
+  if (!cur.on_screen() || !signature_.matches(cur)) return;
+  if (!prev.on_screen() || cur.tile != prev.tile || cur.palette != prev.palette) return;
+
+  const int dx = cur.x - prev.x;
+  const int dy = cur.y - prev.y;
+
+  const bool x_is_step = std::abs(dx) >= kMinStepPixels && std::abs(dx) <= kMaxStepPixels;
+  const bool y_is_step = std::abs(dy) >= kMinStepPixels && std::abs(dy) <= kMaxStepPixels;
+
+  const bool agrees = (right && dx > 0 && x_is_step) || (left && dx < 0 && x_is_step) ||
+                      (down && dy > 0 && y_is_step) || (up && dy < 0 && y_is_step);
+  const bool opposes = (right && dx < 0 && x_is_step) || (left && dx > 0 && x_is_step) ||
+                       (down && dy < 0 && y_is_step) || (up && dy > 0 && y_is_step);
+
+  if (agrees && !opposes) {
+    // Moved exactly as commanded: this really is being driven by the D-pad.
+    // Forgive any prior stalls or wrong turns and start the budget fresh.
+    verify_fail_ = 0;
+    return;
+  }
+  if (agrees && opposes) {
+    // Ambiguous diagonal chord (as in correlate()): no evidence either way.
+    return;
+  }
+
+  // Failed to confirm this step, either by sitting still (or creeping/
+  // jumping outside the plausible step band) or by moving the wrong way.
+  // A wrong-direction move counts double; mere absence of motion counts
+  // once, since the game legitimately ignores input mid-animation.
+  verify_fail_ += opposes ? 2 : 1;
+  if (verify_fail_ >= kVerifyFailBudget) {
+    locked_ = false;
+    signature_ = {};
+    locked_index_ = kOamEntryCount;
+    candidates_ = {};
+    missing_frames_ = 0;
+    verify_fail_ = 0;
   }
 }
 
@@ -154,6 +212,7 @@ Indicator OamTracker::update(const std::uint8_t* oam, std::uint16_t emitted_dpad
   }
 
   correlate(oam, emitted_dpad);
+  verify_lock(oam, emitted_dpad);
 
   Indicator result;
   if (locked_) {
@@ -168,6 +227,7 @@ Indicator OamTracker::update(const std::uint8_t* oam, std::uint16_t emitted_dpad
       locked_index_ = kOamEntryCount;
       candidates_ = {};
       missing_frames_ = 0;
+      verify_fail_ = 0;
     }
   }
 

@@ -547,6 +547,102 @@ void tests_deadband_falls_back_to_snap_radius_before_any_step_observed() {
                 "9px is within the 10px snap_radius fallback used before any step is observed");
 }
 
+void tests_wrong_lock_oscillation_is_bounded() {
+  // A stand-in for OamTracker having anchored to the wrong sprite: the
+  // "indicator" reported here has nothing to do with the D-pad at all -- it
+  // sweeps back and forth on its own clock, crossing the target repeatedly,
+  // exactly like an unrelated animated sprite that happens to straddle
+  // wherever the target is. The error can therefore never shrink and stay
+  // shrunk no matter what PointerNav presses. Without the oscillation guard
+  // this would press one direction or the other on almost every single
+  // frame, forever; with it, the axis must recognise the non-improving
+  // reversals and back off into Blocked, bounding the total.
+  aw::PointerNav nav;
+
+  // Bounces directly between two positions straddling the target every
+  // frame -- never lingering anywhere near it -- so this is a clean test of
+  // the reversal guard specifically, independent of the deadband: nothing
+  // here ever looks "arrived".
+  const int lo = -40;
+  const int hi = 40;
+  bool at_hi = false;
+
+  int presses = 0;
+  for (int i = 0; i < 300; ++i) {
+    at_hi = !at_hi;
+    aw::NavInput in;
+    in.armed_pointer = true;
+    in.steerable = true;
+    in.target_x = 0;
+    in.target_y = 0;
+    in.indicator_found = true;
+    in.indicator_x = at_hi ? hi : lo;
+    in.indicator_y = 0;
+
+    const aw::NavOutput out = nav.step(in);
+    if ((out.keys & (aw::kKeyRight | aw::kKeyLeft)) != 0) ++presses;
+  }
+
+  require_equal(presses < 40, true,
+                "a possessed indicator's axis backs off instead of pressing on almost every frame");
+}
+
+void tests_single_corrective_reversal_is_not_throttled() {
+  // Legitimate convergence can include one overshoot-and-correct: press one
+  // way, land past the target by more than the deadband, press back once,
+  // land exactly on it. That lone reversal must never be mistaken for the
+  // start of an oscillation and must not be throttled.
+  aw::PointerNav nav;
+  const int target_x = 100;
+
+  auto step_at = [&](int indicator_x) {
+    aw::NavInput in;
+    in.armed_pointer = true;
+    in.steerable = true;
+    in.target_x = target_x;
+    in.target_y = 0;
+    in.indicator_found = true;
+    in.indicator_x = indicator_x;
+    in.indicator_y = 0;
+    return nav.step(in);
+  };
+
+  // Frame 1: error 100, no step observed yet (deadband falls back to the
+  // config default, 8) -- presses Right.
+  aw::NavOutput out = step_at(0);
+  require_equal((out.keys & aw::kKeyRight) != 0, true, "first press is right");
+
+  // Frame 2: the game responds by 8 px, establishing an 8 px observed step
+  // (4 px deadband from here on). Releasing.
+  out = step_at(8);
+  require_equal(out.keys & aw::kDpadMask, std::uint16_t{0}, "releasing after the game responds");
+
+  // Frame 3: Releasing -> Idle.
+  out = step_at(8);
+  require_equal(out.keys & aw::kDpadMask, std::uint16_t{0}, "releasing frame");
+
+  // Frame 4: error 92 > 4 px deadband, same direction as before (no
+  // reversal) -- presses Right again.
+  out = step_at(8);
+  require_equal((out.keys & aw::kKeyRight) != 0, true, "keeps pressing right");
+
+  // Frame 5: the game overshoots clean past the target, to 111 -- 11 px past
+  // it, outside the 4 px deadband on the far side too. The mid-press
+  // direction change fires immediately: this is the single corrective
+  // reversal, and it must be allowed through, not swallowed by the guard.
+  out = step_at(111);
+  require_equal((out.keys & aw::kKeyLeft) != 0, true,
+                "a single corrective reversal is allowed, not throttled");
+
+  // Frame 6: the correction lands exactly on the target -- arrived, quiet.
+  out = step_at(100);
+  require_equal(out.keys & aw::kDpadMask, std::uint16_t{0}, "settled after the single reversal");
+
+  // Stays settled.
+  out = step_at(100);
+  require_equal(out.keys & aw::kDpadMask, std::uint16_t{0}, "stays settled, no hunting");
+}
+
 void tests_reset_clears_state() {
   aw::NavConfig cfg;
   cfg.blocked_frames = 2;
@@ -622,6 +718,8 @@ int main() {
     tests_deadband_16px_step_matches_prior_behaviour();
     tests_deadband_falls_back_to_snap_radius_before_any_step_observed();
     tests_reset_clears_observed_step();
+    tests_wrong_lock_oscillation_is_bounded();
+    tests_single_corrective_reversal_is_not_throttled();
     std::cout << "pointer_nav_tests passed!\n";
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';

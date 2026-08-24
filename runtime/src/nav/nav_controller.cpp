@@ -188,12 +188,17 @@ void NavController::debug_log(const NavInput& in, const NavOutput& out) {
             << " ctx=" << context_name(context_)
             << " locked=" << tracker_.locked()
             << " sig(tile=" << sig.tile << ",pal=" << sig.palette << ")"
+            << " oam_index=" << indicator_.oam_index
+            << " size=" << indicator_.width << "x" << indicator_.height
             << " indicator(found=" << in.indicator_found
             << ",x=" << in.indicator_x << ",y=" << in.indicator_y << ")"
             << " target(armed=" << in.armed_pointer
             << ",x=" << in.target_x << ",y=" << in.target_y << ")"
+            << " error(x=" << (in.target_x - in.indicator_x)
+            << ",y=" << (in.target_y - in.indicator_y) << ")"
             << " steerable=" << in.steerable
             << " keys=0x" << std::hex << out.keys << std::dec
+            << " phase(x=" << nav_.x_phase_name() << ",y=" << nav_.y_phase_name() << ")"
             << "\n";
 }
 
