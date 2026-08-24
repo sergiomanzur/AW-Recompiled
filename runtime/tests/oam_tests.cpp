@@ -56,6 +56,21 @@ void tests_x_is_nine_bit_signed() {
   require_equal(e.x, -16, "negative x");
 }
 
+void tests_x_nine_bit_boundaries() {
+  // attr1's X field is 9 bits of two's complement: raw 0..255 stay
+  // positive, raw 256..511 fold back to -256..-1. Pin the exact fold
+  // boundary and both extremes so an off-by-one threshold (e.g. a fold
+  // starting at raw >= 257 instead of >= 256) cannot survive.
+  OamBuffer oam;
+  oam.set(0, /*attr0=*/40, /*attr1=*/255, /*attr2=*/0);
+  oam.set(1, /*attr0=*/40, /*attr1=*/256, /*attr2=*/0);
+  oam.set(2, /*attr0=*/40, /*attr1=*/511, /*attr2=*/0);
+
+  require_equal(aw::decode_oam_entry(oam.bytes.data(), 0).x, 255, "raw 255 stays positive");
+  require_equal(aw::decode_oam_entry(oam.bytes.data(), 1).x, -256, "raw 256 folds to -256");
+  require_equal(aw::decode_oam_entry(oam.bytes.data(), 2).x, -1, "raw 511 folds to -1");
+}
+
 void tests_disabled_objects_are_not_visible() {
   OamBuffer oam;
   // attr0 bits 8-9 == 0b10 is the "disabled" object mode.
@@ -65,6 +80,26 @@ void tests_disabled_objects_are_not_visible() {
   require_equal(e.on_screen(), false, "disabled is off screen");
 }
 
+void tests_object_mode_bit_combinations() {
+  // attr0 bits 8-9 encode the OBJ mode: bit8 is "Transformed"
+  // (rotation/scaling), bit9 is "Disable" -- but bit9 only means disable
+  // when bit8 is 0. When both bits are set (0b11) the object is an
+  // affine "double size" sprite, not a disabled one, and it still
+  // renders. Checking a single bit instead of the full two-bit field
+  // would wrongly hide those double-size affine sprites, so pin all four
+  // combinations explicitly.
+  OamBuffer oam;
+  oam.set(0, /*attr0=*/static_cast<std::uint16_t>(60 | (0 << 8)), /*attr1=*/50, /*attr2=*/0);
+  oam.set(1, /*attr0=*/static_cast<std::uint16_t>(60 | (1 << 8)), /*attr1=*/50, /*attr2=*/0);
+  oam.set(2, /*attr0=*/static_cast<std::uint16_t>(60 | (2 << 8)), /*attr1=*/50, /*attr2=*/0);
+  oam.set(3, /*attr0=*/static_cast<std::uint16_t>(60 | (3 << 8)), /*attr1=*/50, /*attr2=*/0);
+
+  require_equal(aw::decode_oam_entry(oam.bytes.data(), 0).visible, true, "mode 0b00 (normal) visible");
+  require_equal(aw::decode_oam_entry(oam.bytes.data(), 1).visible, true, "mode 0b01 (affine) visible");
+  require_equal(aw::decode_oam_entry(oam.bytes.data(), 2).visible, false, "mode 0b10 (disabled) invisible");
+  require_equal(aw::decode_oam_entry(oam.bytes.data(), 3).visible, true, "mode 0b11 (affine double-size) visible");
+}
+
 void tests_offscreen_y_is_not_on_screen() {
   OamBuffer oam;
   // Y = 200 is the usual "parked below the screen" idiom.
@@ -72,6 +107,36 @@ void tests_offscreen_y_is_not_on_screen() {
   const aw::OamEntry e = aw::decode_oam_entry(oam.bytes.data(), 2);
   require_equal(e.visible, true, "not disabled");
   require_equal(e.on_screen(), false, "parked below screen");
+}
+
+void tests_on_screen_horizontal_bounds() {
+  // on_screen() requires x > -64 and x < 240. A 64-wide sprite parked
+  // exactly at x = -64 has zero visible columns, so -64 itself must read
+  // as off screen; -63 is the first on-screen column. Mirror the check
+  // at the right edge: 239 on screen, 240 off screen.
+  OamBuffer oam;
+  oam.set(0, /*attr0=*/50, /*attr1=*/448 /* raw two's-complement for x = -64 */, /*attr2=*/0);
+  oam.set(1, /*attr0=*/50, /*attr1=*/449 /* raw two's-complement for x = -63 */, /*attr2=*/0);
+  oam.set(2, /*attr0=*/50, /*attr1=*/239, /*attr2=*/0);
+  oam.set(3, /*attr0=*/50, /*attr1=*/240, /*attr2=*/0);
+
+  require_equal(aw::decode_oam_entry(oam.bytes.data(), 0).on_screen(), false, "x = -64 is off screen");
+  require_equal(aw::decode_oam_entry(oam.bytes.data(), 1).on_screen(), true, "x = -63 is on screen");
+  require_equal(aw::decode_oam_entry(oam.bytes.data(), 2).on_screen(), true, "x = 239 is on screen");
+  require_equal(aw::decode_oam_entry(oam.bytes.data(), 3).on_screen(), false, "x = 240 is off screen");
+}
+
+void tests_tile_field_uses_full_ten_bits() {
+  // attr2's tile field (character name) is 10 bits (mask 0x3FF). A mask
+  // of 0x1FF (9 bits) would silently drop bit 9 and still pass every
+  // other test in this file, since the only tile value exercised
+  // elsewhere (0x123) fits in 9 bits.
+  OamBuffer oam;
+  oam.set(0, /*attr0=*/40, /*attr1=*/50, /*attr2=*/0x200);
+  oam.set(1, /*attr0=*/40, /*attr1=*/50, /*attr2=*/0x3FF);
+
+  require_equal(aw::decode_oam_entry(oam.bytes.data(), 0).tile, 0x200, "tile bit 9 alone round-trips");
+  require_equal(aw::decode_oam_entry(oam.bytes.data(), 1).tile, 0x3FF, "tile all ten bits round-trip");
 }
 
 void tests_out_of_range_index_is_invisible() {
@@ -91,8 +156,12 @@ int main() {
   try {
     tests_decodes_position_tile_and_palette();
     tests_x_is_nine_bit_signed();
+    tests_x_nine_bit_boundaries();
     tests_disabled_objects_are_not_visible();
+    tests_object_mode_bit_combinations();
     tests_offscreen_y_is_not_on_screen();
+    tests_on_screen_horizontal_bounds();
+    tests_tile_field_uses_full_ten_bits();
     tests_out_of_range_index_is_invisible();
     tests_null_buffer_is_invisible();
     std::cout << "oam_tests passed!\n";
