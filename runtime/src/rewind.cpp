@@ -4,10 +4,12 @@
 
 namespace aw {
 
-RewindBuffer::RewindBuffer(int capacity, int snapshot_interval)
+RewindBuffer::RewindBuffer(int capacity, int snapshot_interval, int max_history_frames)
     : capacity_(capacity < 1 ? 1 : capacity),
-      snapshot_interval_(snapshot_interval < 1 ? 1 : snapshot_interval) {
+      snapshot_interval_(snapshot_interval < 1 ? 1 : snapshot_interval),
+      max_history_frames_(max_history_frames < 1 ? 1 : max_history_frames) {
   slots_.resize(static_cast<std::size_t>(capacity_), nullptr);
+  slot_frames_.resize(static_cast<std::size_t>(capacity_), 0);
 }
 
 void RewindBuffer::reset() {
@@ -22,6 +24,7 @@ void RewindBuffer::reset() {
   }
   head_ = 0;
   count_ = 0;
+  frames_elapsed_ = 0;
   frames_since_snapshot_ = 0;
   consecutive_failures_ = 0;
   disabled_ = false;
@@ -58,25 +61,49 @@ bool RewindBuffer::capture_snapshot() {
     ++count_;
   }
   slots_[slot] = snapshot;
+  slot_frames_[slot] = frames_elapsed_;
   head_ = (head_ + 1) % capacity_;
 
   if (io_.size != nullptr) {
     bytes_held_ += io_.size(io_.user, snapshot);
     if (!size_logged_) {
       size_logged_ = true;
-      std::printf("Rewind: history armed (%d snapshots x %.1f KB max, interval %d frames)\n",
+      std::printf("Rewind: history armed (%d snapshots x %.1f KB max, interval %d frames, "
+                  "window %d frames)\n",
                   capacity_,
                   static_cast<double>(io_.size(io_.user, snapshot)) / 1024.0,
-                  snapshot_interval_);
+                  snapshot_interval_,
+                  max_history_frames_);
     }
   }
   return true;
+}
+
+void RewindBuffer::evict_expired() {
+  // Snapshots age out of the window as the game runs, so rewinding can never
+  // reach further back than max_history_frames regardless of ring capacity.
+  while (count_ > 0) {
+    const std::size_t oldest = static_cast<std::size_t>(
+        (head_ - count_ + capacity_ * 2) % capacity_);
+    if (frames_elapsed_ <= slot_frames_[oldest] ||
+        frames_elapsed_ - slot_frames_[oldest] <= static_cast<std::uint64_t>(max_history_frames_)) {
+      break;
+    }
+    if (io_.size != nullptr) {
+      bytes_held_ -= io_.size(io_.user, slots_[oldest]);
+    }
+    io_.release(io_.user, slots_[oldest]);
+    slots_[oldest] = nullptr;
+    --count_;
+  }
 }
 
 void RewindBuffer::on_frame() {
   if (disabled_) {
     return;
   }
+  ++frames_elapsed_;
+  evict_expired();
   ++frames_since_snapshot_;
   if (frames_since_snapshot_ >= snapshot_interval_) {
     frames_since_snapshot_ = 0;

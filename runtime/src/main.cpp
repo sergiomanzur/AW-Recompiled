@@ -211,12 +211,18 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
 
     // Time travel: an in-RAM savestate ring. Snapshots are zlib-compressed
     // memory blobs, so several captures per second never touch the disk.
+    // History is capped at max_seconds (default 5): older snapshots are
+    // evicted as the game runs, so rewinding cannot reach past that window.
+    const double gba_fps = 16777216.0 / 280896.0; // ~59.7275 FPS
     const bool rewind_enabled = config.get_int("Rewind", "enabled", 1) != 0;
     const int rewind_interval = std::clamp(config.get_int("Rewind", "snapshot_interval",
                                                           aw::RewindBuffer::kDefaultInterval), 5, 120);
     const int rewind_capacity = std::clamp(config.get_int("Rewind", "capacity",
                                                           aw::RewindBuffer::kDefaultCapacity), 20, 1200);
-    aw::RewindBuffer rewind_buffer(rewind_capacity, rewind_interval);
+    const int rewind_max_seconds = std::clamp(config.get_int("Rewind", "max_seconds", 5), 1, 300);
+    const int rewind_window_frames = std::max(
+        1, static_cast<int>(static_cast<double>(rewind_max_seconds) * gba_fps));
+    aw::RewindBuffer rewind_buffer(rewind_capacity, rewind_interval, rewind_window_frames);
     if (rewind_enabled) {
       rewind_buffer.set_io(make_rewind_io(core));
     }
@@ -255,7 +261,6 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
     int rewind_smoke_restores = 0;
 
     using clock = std::chrono::steady_clock;
-    const double gba_fps = 16777216.0 / 280896.0; // ~59.7275 FPS
     const std::chrono::nanoseconds frame_duration_ns(static_cast<std::int64_t>(1000000000.0 / gba_fps));
     auto next_frame_time = clock::now();
 

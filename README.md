@@ -39,9 +39,9 @@
 | **Instant Rewind** (hold to step back ~1/3 s per step, release to resume) | `Backspace` (hold) | `Y` or `LT` (hold) |
 | **Fast-Forward** (hold for max-speed emulation, release for 1x) | `Tab` (hold) | `X` or `RT` (hold) |
 
-- Rewind keeps an in-RAM savestate ring (~80 s of history by default; no disk I/O, no savestate slots touched). Holding rewinds through your last moves, attacks, or entire turns; releasing resumes play from that point.
+- Rewind keeps an in-RAM savestate ring (up to **5 seconds** of history by default; no disk I/O, no savestate slots touched). Holding rewinds through your last moves, attacks, or combat animations; releasing resumes play from that point. Snapshots older than the window are evicted automatically, so you can never rewind further back than the limit.
 - Fast-forward mutes timeline audio while held (no pitch distortion, no drifting sync) and returns to clean 1x playback on release. Both modes show their state in the window title, and are also available from the **File** menu.
-- Tunable in `config.ini` under `[Rewind]`: `enabled`, `snapshot_interval` (frames between snapshots), `capacity` (ring size).
+- Tunable in `config.ini` under `[Rewind]`: `enabled`, `snapshot_interval` (frames between snapshots), `capacity` (ring size), `max_seconds` (rewind window, default 5).
 
 ---
 

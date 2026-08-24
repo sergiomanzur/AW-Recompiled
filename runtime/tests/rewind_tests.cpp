@@ -187,6 +187,62 @@ void test_bytes_held_tracks_snapshots() {
           "bytes released on rewind");
 }
 
+void test_window_evicts_aged_snapshots() {
+  FakeStore store;
+  // One snapshot per frame, evict anything older than 5 frames.
+  aw::RewindBuffer rewind(32, 1, 5);
+  rewind.set_io(make_io(store));
+
+  for (int frame = 0; frame < 10; ++frame) {
+    rewind.on_frame();
+  }
+  // Captures at frames 1..10; at frame 10 only ages <= 5 survive (frames 5..10).
+  require(rewind.size() == 6, "window clamps ring at 6 snapshots");
+  require(store.live_handles == 6, "aged-out handles released");
+
+  // Restores walk back only as far as the window edge.
+  for (int expected = 9; expected >= 4; --expected) {
+    require(rewind.rewind_step(), "step inside the window restores");
+    require(store.restored.back() == expected, "newest-in-window restored in order");
+  }
+  require(!rewind.rewind_step(), "cannot rewind past the window");
+  require(rewind.empty(), "window-bounded history exhausted");
+}
+
+void test_window_never_exceeds_max_reach() {
+  FakeStore store;
+  // Interval 3, window 6: reach is at most 6 frames regardless of capacity.
+  aw::RewindBuffer rewind(32, 3, 6);
+  rewind.set_io(make_io(store));
+
+  for (int frame = 0; frame < 30; ++frame) {
+    rewind.on_frame();
+  }
+  // Live captures sit at frames 24, 27, 30 (ages 6, 3, 0).
+  require(rewind.size() == 3, "only in-window snapshots kept");
+
+  int steps = 0;
+  while (rewind.rewind_step()) {
+    ++steps;
+  }
+  require(steps == 3, "all restores stay inside the window");
+  require(store.restored.size() == std::size_t(3), "one restore per live snapshot");
+}
+
+void test_window_edge_survives_exactly_at_limit() {
+  FakeStore store;
+  aw::RewindBuffer rewind(32, 1, 5);
+  rewind.set_io(make_io(store));
+
+  for (int frame = 0; frame < 6; ++frame) {
+    rewind.on_frame();
+  }
+  // At frame 6 the frame-1 snapshot is exactly 5 frames old: still reachable.
+  require(rewind.size() == 6, "boundary-age snapshot survives");
+  rewind.on_frame();
+  require(rewind.size() == 6, "snapshot ages out one frame past the window");
+}
+
 }  // namespace
 
 int main() {
@@ -198,6 +254,9 @@ int main() {
   test_capture_failures_disable();
   test_restore_failure_disables();
   test_bytes_held_tracks_snapshots();
+  test_window_evicts_aged_snapshots();
+  test_window_never_exceeds_max_reach();
+  test_window_edge_survives_exactly_at_limit();
 
   if (failures == 0) {
     std::printf("rewind_tests: all tests passed\n");
