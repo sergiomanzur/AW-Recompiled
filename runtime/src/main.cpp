@@ -224,6 +224,15 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         break;
       }
 
+      const std::string savestate_request = window.consume_savestate_request();
+      if (!savestate_request.empty()) {
+        if (aw_mgba_save_state(core, savestate_request.c_str())) {
+          std::cout << "Saved state: " << savestate_request << std::endl;
+        } else {
+          std::cerr << "Failed to save state: " << savestate_request << std::endl;
+        }
+      }
+
       hardware.keys_pressed |= nav.update(window.input_frame());
 
       aw_mgba_run_frame(core, hardware.keys_pressed);

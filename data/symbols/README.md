@@ -30,3 +30,36 @@ Addresses are decimal because `ConfigFile::get_int` does not parse hex. Put the
 hex value in a trailing comment.
 
 Generate these with `aw-symbol-miner` (see `tools/`).
+
+## Regenerating cursor coordinate addresses
+
+The steering path is moving from a sprite-position guess (`OamTracker`) to
+reading the cursor's tile X/Y directly from RAM. Finding those addresses for
+a given screen (map view, list menu, etc.) is a two-step, human-in-the-loop
+process:
+
+1. Run the game normally (`advance-wars-native`), navigate to the screen you
+   want to mine (e.g. the in-battle map cursor), and press **F5** while
+   holding a digit key (`0`-`9`) to pick a save slot. This writes
+   `state_<N>.ss` to the working directory and prints the filename to
+   stdout. Holding no digit defaults to slot `0`. `state_*.ss` files are
+   gitignored — they embed ROM-derived data and must never be committed.
+2. Run the offline miner against that savestate:
+
+       build/native/runtime/aw-cursor-miner "<rom path>" state_0.ss
+
+   It presses Right/Left/Down/Up against the loaded state several times,
+   diffs EWRAM (and IWRAM, when the core exposes it) before/after each
+   press, and reports every byte offset that moved by exactly +/-1 in
+   lockstep with the corresponding direction. Byte offsets adjacent in
+   memory are called out separately as likely X/Y pairs — cursor coordinates
+   are usually stored next to each other.
+3. Record the winning **absolute** address (e.g. `0x02001234`) as a new
+   symbol entry below, in **decimal**, with the hex value in a trailing
+   comment — same convention as every other address in this file, because
+   `ConfigFile::get_int` only parses base-10.
+
+If the miner reports no candidates for an axis, it is telling you the truth
+rather than fabricating one: recapture the savestate on a screen where the
+D-pad is known to move a cursor, away from a map edge, and not mid-animation,
+then try again.

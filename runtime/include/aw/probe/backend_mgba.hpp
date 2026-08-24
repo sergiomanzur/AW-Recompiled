@@ -16,6 +16,7 @@ public:
   bool available() override;
   const std::uint8_t* oam() override;
   const std::uint8_t* ewram(std::size_t& size_out) override;
+  const std::uint8_t* iwram(std::size_t& size_out) override;
   std::uint16_t read_io16(std::uint32_t addr) override;
 
 private:
@@ -26,6 +27,8 @@ private:
   const std::uint8_t* oam_ = nullptr;
   const std::uint8_t* ewram_ = nullptr;
   std::size_t ewram_size_ = 0;
+  const std::uint8_t* iwram_ = nullptr;
+  std::size_t iwram_size_ = 0;
 };
 
 }  // namespace aw

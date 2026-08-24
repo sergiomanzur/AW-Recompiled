@@ -74,6 +74,11 @@ public:
   bool has_pending_rom() const { return !pending_rom_path_.empty(); }
   std::string consume_pending_rom();
 
+  // Returns the pending savestate filename requested via the F5 hotkey (see
+  // process_events), or empty if none. Move-and-clear: consuming it clears
+  // the pending request.
+  std::string consume_savestate_request();
+
   // Launches native Windows File Open Dialog for selecting a .gba ROM file
   static std::string open_file_dialog(void* parent_hwnd = nullptr);
 
@@ -95,6 +100,8 @@ private:
   InternalResolution internal_resolution_ = InternalResolution::Native;
   VideoFilter video_filter_ = VideoFilter::NearestNeighbor;
   std::string pending_rom_path_;
+  std::string savestate_request_;
+  bool savestate_key_was_down_ = false;
 
   InputMapping input_mapping_;
 

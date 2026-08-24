@@ -13,6 +13,8 @@ void MgbaProbeBackend::set_core(void* core) {
   oam_ = nullptr;
   ewram_ = nullptr;
   ewram_size_ = 0;
+  iwram_ = nullptr;
+  iwram_size_ = 0;
 }
 
 void MgbaProbeBackend::resolve() {
@@ -32,6 +34,15 @@ void MgbaProbeBackend::resolve() {
   if (ewram_ptr != nullptr && ewram_size > 0) {
     ewram_ = static_cast<const std::uint8_t*>(ewram_ptr);
     ewram_size_ = ewram_size;
+  }
+
+  // IWRAM is optional: unavailability doesn't disable pointer navigation
+  // (which only needs OAM/EWRAM), but offline tooling wants it too.
+  std::size_t iwram_size = 0;
+  void* iwram_ptr = aw_mgba_memory_block(core, "iwram", &iwram_size);
+  if (iwram_ptr != nullptr && iwram_size > 0) {
+    iwram_ = static_cast<const std::uint8_t*>(iwram_ptr);
+    iwram_size_ = iwram_size;
   }
 
   if (oam_ == nullptr || ewram_ == nullptr) {
@@ -55,6 +66,12 @@ const std::uint8_t* MgbaProbeBackend::ewram(std::size_t& size_out) {
   resolve();
   size_out = ewram_size_;
   return ewram_;
+}
+
+const std::uint8_t* MgbaProbeBackend::iwram(std::size_t& size_out) {
+  resolve();
+  size_out = iwram_size_;
+  return iwram_;
 }
 
 std::uint16_t MgbaProbeBackend::read_io16(std::uint32_t addr) {

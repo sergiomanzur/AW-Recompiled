@@ -35,6 +35,12 @@ void aw_mgba_write16(struct mCore* core, uint32_t address, uint16_t value);
 // avoids depending on mGBA's internal region enum.
 void* aw_mgba_memory_block(struct mCore* core, const char* internal_name, size_t* size_out);
 
+// Savestate capture/restore for offline tooling (e.g. the cursor-coordinate
+// miner) and the F5 capture hotkey. Returns 1 on success, 0 on failure; never
+// crashes the game on failure.
+int aw_mgba_save_state(struct mCore* core, const char* path);
+int aw_mgba_load_state(struct mCore* core, const char* path);
+
 #ifdef __cplusplus
 }
 #endif

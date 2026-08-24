@@ -29,3 +29,7 @@ Thumbs.db
 *.bmp
 *.oamlog
 
+# Savestates captured via the F5 hotkey or produced/consumed by the offline
+# cursor miner. Contain ROM-derived data and must never be committed.
+*.ss
+

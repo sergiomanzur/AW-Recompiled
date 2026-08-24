@@ -12,10 +12,12 @@
 
 #include <mgba/core/core.h>
 #include <mgba/core/interface.h>
+#include <mgba/core/serialize.h>
 #include <mgba-util/audio-buffer.h>
 #include <mgba-util/image.h>
 #include <mgba-util/vfs.h>
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -126,6 +128,45 @@ uint16_t aw_mgba_read16(struct mCore* core, uint32_t address) {
 void aw_mgba_write16(struct mCore* core, uint32_t address, uint16_t value) {
     if (!core || !core->rawWrite16) return;
     core->rawWrite16(core, address, -1, value);
+}
+
+int aw_mgba_save_state(struct mCore* core, const char* path) {
+    if (!core || !path) return 0;
+
+    // mCoreSaveStateNamed memory-maps the file with MAP_WRITE. On this
+    // project's Windows VFS backend (vfs-fd.c, selected by ENABLE_VFS_FD),
+    // CreateFileMapping/MapViewOfFile for a writable mapping needs the
+    // underlying file descriptor opened with read+write access -- O_WRONLY
+    // alone makes the mapping (and therefore the whole save) silently fail.
+    struct VFile* vf = VFileOpen(path, O_RDWR | O_CREAT | O_TRUNC);
+    if (!vf) {
+        fprintf(stderr, "[mgba] aw_mgba_save_state: VFileOpen failed for %s\n", path);
+        return 0;
+    }
+
+    const bool ok = mCoreSaveStateNamed(core, vf, SAVESTATE_SAVEDATA);
+    vf->close(vf);
+    if (!ok) {
+        fprintf(stderr, "[mgba] aw_mgba_save_state: mCoreSaveStateNamed failed for %s\n", path);
+    }
+    return ok ? 1 : 0;
+}
+
+int aw_mgba_load_state(struct mCore* core, const char* path) {
+    if (!core || !path) return 0;
+
+    struct VFile* vf = VFileOpen(path, O_RDONLY);
+    if (!vf) {
+        fprintf(stderr, "[mgba] aw_mgba_load_state: VFileOpen failed for %s\n", path);
+        return 0;
+    }
+
+    const bool ok = mCoreLoadStateNamed(core, vf, SAVESTATE_SAVEDATA);
+    vf->close(vf);
+    if (!ok) {
+        fprintf(stderr, "[mgba] aw_mgba_load_state: mCoreLoadStateNamed failed for %s\n", path);
+    }
+    return ok ? 1 : 0;
 }
 
 void* aw_mgba_memory_block(struct mCore* core, const char* internal_name, size_t* size_out) {

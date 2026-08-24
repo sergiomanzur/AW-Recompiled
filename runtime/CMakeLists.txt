@@ -313,3 +313,13 @@ set_tests_properties(advance_wars_native_double_click_smoke PROPERTIES
   TIMEOUT 120
   PASS_REGULAR_EXPRESSION "ROM: ADVANCEWARS AWRE01 Rev 1"
 )
+
+add_executable(aw-cursor-miner
+  tools/cursor_miner.cpp
+)
+
+target_include_directories(aw-cursor-miner PRIVATE
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
+)
+
+target_link_libraries(aw-cursor-miner PRIVATE aw_runtime)

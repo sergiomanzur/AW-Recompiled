@@ -25,6 +25,14 @@ public:
   // 256 KB of external work RAM, or nullptr. `size_out` receives the real size.
   virtual const std::uint8_t* ewram(std::size_t& size_out) = 0;
 
+  // 32 KB of internal work RAM, or nullptr. `size_out` receives the real
+  // size. Defaults to unavailable (nullptr, size 0) so existing backends
+  // that predate this accessor need not be updated; MgbaProbeBackend
+  // overrides it. Offline tooling (e.g. the cursor-coordinate miner) uses
+  // this alongside ewram() since some games keep hot state like a cursor
+  // position in IWRAM rather than EWRAM.
+  virtual const std::uint8_t* iwram(std::size_t& size_out) { size_out = 0; return nullptr; }
+
   // A 16-bit memory-mapped IO register by absolute address, e.g. 0x04000010
   // for REG_BG0HOFS. Returns 0 when unavailable.
   virtual std::uint16_t read_io16(std::uint32_t addr) = 0;

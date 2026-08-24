@@ -460,6 +460,12 @@ std::string Window::consume_pending_rom() {
   return rom;
 }
 
+std::string Window::consume_savestate_request() {
+  std::string request = std::move(savestate_request_);
+  savestate_request_.clear();
+  return request;
+}
+
 void Window::set_aspect_ratio(AspectRatio ratio) {
   aspect_ratio_ = ratio;
   update_menu_checks();
@@ -736,6 +742,25 @@ bool Window::process_events(Hardware& hardware) {
   win32_input_.poll(input_frame_);
 
   hardware.keys_pressed |= input_frame_.gba_keys;
+
+  // F5 hotkey: request a savestate capture to state_<N>.ss, where N is
+  // whichever digit key 0-9 is currently held (default 0 when none is).
+  // Edge-detected against the previous poll so a held F5 produces exactly
+  // one request, not one per frame.
+  const bool savestate_key_is_down = (GetAsyncKeyState(VK_F5) & 0x8000) != 0;
+  if (savestate_key_is_down && !savestate_key_was_down_) {
+    int slot = 0;
+    for (int digit = 0; digit <= 9; ++digit) {
+      if (GetAsyncKeyState('0' + digit) & 0x8000) {
+        slot = digit;
+        break;
+      }
+    }
+    savestate_request_ = "state_" + std::to_string(slot) + ".ss";
+    std::cout << "Savestate capture requested: " << savestate_request_ << std::endl;
+  }
+  savestate_key_was_down_ = savestate_key_is_down;
+
   return is_open_;
 }
 
@@ -866,6 +891,7 @@ void Window::load_config(const ConfigFile& /*config*/) {}
 void Window::save_config(ConfigFile& /*config*/) const {}
 void Window::resize_client(int /*width*/, int /*height*/) {}
 std::string Window::consume_pending_rom() { return ""; }
+std::string Window::consume_savestate_request() { return ""; }
 std::string Window::open_file_dialog(void* /*parent_hwnd*/) { return ""; }
 void Window::update_menu_checks() {}
 
