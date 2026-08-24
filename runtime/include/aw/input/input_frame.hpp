@@ -12,6 +12,12 @@ namespace aw {
 // these arrives from a physical device.
 constexpr std::uint16_t kDpadMask = kKeyUp | kKeyDown | kKeyLeft | kKeyRight;
 
+// Engine-level hotkeys (time travel / fast forward). These never reach the
+// GBA; the platform layer ORs them into InputFrame alongside the buttons.
+constexpr std::uint16_t kHotkeyRewind = 1u << 0;        // Hold: rewind time
+constexpr std::uint16_t kHotkeyFastForward = 1u << 1;   // Hold: fast forward
+constexpr std::uint16_t kHotkeyMask = kHotkeyRewind | kHotkeyFastForward;
+
 enum class PointerKind : std::uint8_t {
   None,   // Slot unused
   Mouse,  // Relative device with a persistent on-screen position
@@ -41,12 +47,14 @@ constexpr std::size_t kMaxPointers = 4;
 struct InputFrame {
   std::uint16_t gba_keys = 0;    // Combined aw::kKey* bitmask
   std::uint16_t device_dpad = 0; // D-pad bits that came from a physical device
+  std::uint16_t hotkeys = 0;     // Combined aw::kHotkey* bitmask
   std::array<PointerState, kMaxPointers> pointers{};
   std::size_t pointer_count = 0;
 
   void clear() {
     gba_keys = 0;
     device_dpad = 0;
+    hotkeys = 0;
     pointers = {};
     pointer_count = 0;
   }

@@ -70,6 +70,8 @@ constexpr UINT IDM_FILE_SAVE_QUICK      = 1003;
 constexpr UINT IDM_FILE_LOAD_QUICK      = 1004;
 constexpr UINT IDM_FILE_SAVE_AS         = 1005;
 constexpr UINT IDM_FILE_LOAD_FROM       = 1006;
+constexpr UINT IDM_FILE_REWIND          = 1007;
+constexpr UINT IDM_FILE_FASTFORWARD     = 1008;
 constexpr UINT IDM_SAVE_SLOT_1          = 1011;
 constexpr UINT IDM_SAVE_SLOT_2          = 1012;
 constexpr UINT IDM_SAVE_SLOT_3          = 1013;
@@ -301,6 +303,10 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
           std::string path = Window::open_savestate_dialog(hwnd);
           if (!path.empty()) win->request_load_state(path);
         }
+      } else if (id == IDM_FILE_REWIND) {
+        if (win != nullptr) win->request_rewind_step();
+      } else if (id == IDM_FILE_FASTFORWARD) {
+        if (win != nullptr) win->toggle_fast_forward_latch();
       } else if (id >= IDM_SAVE_SLOT_1 && id <= IDM_SAVE_SLOT_5) {
         if (win != nullptr) win->request_save_state("state_" + std::to_string(id - IDM_SAVE_SLOT_1 + 1) + ".ss");
       } else if (id >= IDM_LOAD_SLOT_1 && id <= IDM_LOAD_SLOT_5) {
@@ -379,6 +385,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
 
 Window::Window(int width, int height, const char* title)
     : width_(width), height_(height) {
+  window_title_ = title != nullptr ? title : "Advance Wars (Native Recomp)";
   HINSTANCE instance = GetModuleHandleA(nullptr);
 
   WNDCLASSEXA wc = {};
@@ -435,6 +442,9 @@ Window::Window(int width, int height, const char* title)
   AppendMenuA(hFileMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hLoadSlotMenu), "&Load State Slot");
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_SAVE_AS, "Save State &As...");
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_LOAD_FROM, "Load State &From...");
+  AppendMenuA(hFileMenu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_REWIND, "&Rewind / Time Travel\tBackspace");
+  AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_FASTFORWARD, "&Fast-Forward (toggle)\tTab");
   AppendMenuA(hFileMenu, MF_SEPARATOR, 0, nullptr);
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_EXIT, "E&xit");
 
@@ -768,6 +778,7 @@ void Window::update_menu_checks() {
   CheckMenuItem(hMenuBar, IDM_FILTER_SCALE2X,   video_filter_ == VideoFilter::Scale2x         ? MF_CHECKED : MF_UNCHECKED);
 
   CheckMenuItem(hMenuBar, IDM_SETTINGS_TOGGLE_HUD, show_hud_ ? MF_CHECKED : MF_UNCHECKED);
+  CheckMenuItem(hMenuBar, IDM_FILE_FASTFORWARD, fast_forward_latch_ ? MF_CHECKED : MF_UNCHECKED);
 }
 
 
@@ -857,6 +868,11 @@ bool Window::process_events(Hardware& hardware) {
 
   hardware.keys_pressed |= input_frame_.gba_keys;
 
+  // Time travel / fast-forward come through the polled input frame so both
+  // keyboard (Backspace/Tab) and XInput (Y/X + triggers) drive them.
+  rewind_held_ = (input_frame_.hotkeys & kHotkeyRewind) != 0;
+  fast_forward_held_ = (input_frame_.hotkeys & kHotkeyFastForward) != 0;
+
   // F5 hotkey: Quick Save State
   const bool f5_is_down = (GetAsyncKeyState(VK_F5) & 0x8000) != 0;
   if (f5_is_down && !f5_key_was_down_) {
@@ -899,6 +915,32 @@ bool Window::process_events(Hardware& hardware) {
   f2_key_was_down_ = f2_is_down;
 
   return is_open_;
+}
+
+bool Window::consume_rewind_step() {
+  if (!rewind_step_requested_) return false;
+  rewind_step_requested_ = false;
+  return true;
+}
+
+void Window::toggle_fast_forward_latch() {
+  fast_forward_latch_ = !fast_forward_latch_;
+  update_menu_checks();
+  std::cout << "Fast-forward " << (fast_forward_latch_ ? "ON (toggle)" : "OFF") << std::endl;
+}
+
+void Window::set_playback_indicator(int indicator) {
+  if (indicator == playback_indicator_) return;
+  playback_indicator_ = indicator;
+
+  if (hwnd_ == nullptr) return;
+  std::string title = window_title_;
+  if (indicator < 0) {
+    title += "  << TIME TRAVEL";
+  } else if (indicator > 0) {
+    title += "  >> FAST FORWARD";
+  }
+  SetWindowTextA(static_cast<HWND>(hwnd_), title.c_str());
 }
 
 void Window::render(const Ppu& ppu) {
@@ -1032,6 +1074,8 @@ void Window::resize_client(int /*width*/, int /*height*/) {}
 std::string Window::consume_pending_rom() { return ""; }
 std::string Window::consume_pending_save_state() { return ""; }
 std::string Window::consume_pending_load_state() { return ""; }
+bool Window::consume_rewind_step() { return false; }
+void Window::set_playback_indicator(int /*indicator*/) {}
 std::string Window::open_file_dialog(void* /*parent_hwnd*/) { return ""; }
 std::string Window::open_savestate_dialog(void* /*parent_hwnd*/) { return ""; }
 std::string Window::save_savestate_dialog(void* /*parent_hwnd*/) { return ""; }

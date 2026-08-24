@@ -13,6 +13,7 @@
 #include "aw/probe/oam.hpp"
 #include "aw/render/hud_overlay.hpp"
 #include "aw/render/pointer_overlay.hpp"
+#include "aw/rewind.hpp"
 #include "aw/rom.hpp"
 #include "aw/tactical_intel.hpp"
 #include "aw/window.hpp"
@@ -84,6 +85,7 @@ struct Options {
   bool play_enabled = true;
   bool is_double_click = false;
   int max_frames = 0;  // 0 = unlimited (interactive play)
+  bool rewind_smoke = false;  // Exercise the rewind ring headlessly
   std::string oam_log_path;  // Non-empty enables per-frame OAM delta logging
 };
 
@@ -98,6 +100,8 @@ Options parse_options(int argc, char** argv) {
       options.play_enabled = false;
     } else if (arg == "--play") {
       options.play_enabled = true;
+    } else if (arg == "--rewind-smoke") {
+      options.rewind_smoke = true;
     } else if (arg.rfind("--frames=", 0) == 0) {
       options.max_frames = (std::max)(0, std::stoi(arg.substr(9)));
     } else if (arg == "--frames" && i + 1 < argc) {
@@ -154,8 +158,28 @@ Options parse_options(int argc, char** argv) {
   return options;
 }
 
+aw::RewindIo make_rewind_io(struct mCore* core) {
+  aw::RewindIo io;
+  io.user = core;
+  io.capture = [](void* user) -> void* {
+    return aw_mgba_capture_snapshot(static_cast<struct mCore*>(user));
+  };
+  io.restore = [](void* user, void* snapshot) -> bool {
+    return aw_mgba_restore_snapshot(static_cast<struct mCore*>(user), snapshot) != 0;
+  };
+  io.release = [](void* user, void* snapshot) {
+    static_cast<void>(user);
+    aw_mgba_free_snapshot(snapshot);
+  };
+  io.size = [](void* user, void* snapshot) -> std::uint64_t {
+    static_cast<void>(user);
+    return aw_mgba_snapshot_size(snapshot);
+  };
+  return io;
+}
+
 void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_frames,
-                   const std::string& oam_log_path) {
+                   const std::string& oam_log_path, bool rewind_smoke) {
   try {
     auto ppu_ptr = std::make_unique<aw::Ppu>();
     auto& ppu = *ppu_ptr;
@@ -185,10 +209,30 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
     nav.set_backend(probe);
     nav.load_symbols(aw::sha1_hex(rom.bytes));
 
+    // Time travel: an in-RAM savestate ring. Snapshots are zlib-compressed
+    // memory blobs, so several captures per second never touch the disk.
+    const bool rewind_enabled = config.get_int("Rewind", "enabled", 1) != 0;
+    const int rewind_interval = std::clamp(config.get_int("Rewind", "snapshot_interval",
+                                                          aw::RewindBuffer::kDefaultInterval), 5, 120);
+    const int rewind_capacity = std::clamp(config.get_int("Rewind", "capacity",
+                                                          aw::RewindBuffer::kDefaultCapacity), 20, 1200);
+    aw::RewindBuffer rewind_buffer(rewind_capacity, rewind_interval);
+    if (rewind_enabled) {
+      rewind_buffer.set_io(make_rewind_io(core));
+    }
+
+    // Fast-forward runs core frames in a time-bounded burst between renders
+    // so the CPU spends its budget emulating instead of blitting. The frame
+    // minimum keeps GDI render + event-pump overhead below ~5% of the burst.
+    constexpr auto kFastForwardBurstBudget = std::chrono::milliseconds(12);
+    constexpr int kFastForwardBurstMinFrames = 24;
+    constexpr int kFastForwardBurstMaxFrames = 128;
+    // While Backspace is held, step back one snapshot every N loop frames
+    // (~20 steps/s, i.e. scrubbing backward far faster than real time).
+    constexpr int kRewindRepeatFrames = 3;
+
     aw::TacticalIntel intel;
     aw::HdAudioEngine hd_audio;
-    bool show_hud = true;
-    bool f2_was_down = false;
 
     std::ofstream oam_log;
     std::vector<aw::OamEntry> oam_prev(aw::kOamEntryCount);
@@ -205,10 +249,25 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
     std::uint64_t total_audio_samples = 0;
     std::uint64_t frames_run = 0;
 
+    bool rewind_was_held = false;
+    int rewind_repeat_counter = 0;
+    bool ff_was_active = false;
+    int rewind_smoke_restores = 0;
+
     using clock = std::chrono::steady_clock;
     const double gba_fps = 16777216.0 / 280896.0; // ~59.7275 FPS
     const std::chrono::nanoseconds frame_duration_ns(static_cast<std::int64_t>(1000000000.0 / gba_fps));
     auto next_frame_time = clock::now();
+
+    auto copy_video_frame = [&mgba_buffer, &ppu]() {
+      // Copy mGBA video buffer to PPU framebuffer with R/B channel swapping for Win32 GDI
+      const std::uint32_t* src_buf = mgba_buffer.data();
+      std::uint32_t* dst_buf = ppu.framebuffer.data();
+      for (std::size_t i = 0; i < 240 * 160; ++i) {
+        const std::uint32_t c = src_buf[i];
+        dst_buf[i] = ((c & 0x000000FF) << 16) | (c & 0x0000FF00) | ((c & 0x00FF0000) >> 16);
+      }
+    };
 
     while (window.is_open()) {
       if (window.has_pending_rom()) {
@@ -225,6 +284,9 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         // previous ROM's OAM/context.
         probe.set_core(core);
         nav.reset();
+        // Rewind history belongs to the destroyed core's timeline.
+        rewind_buffer.set_io(make_rewind_io(core));
+        rewind_buffer.reset();
       }
 
       hardware.keys_pressed = 0;
@@ -247,39 +309,104 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       if (!load_request.empty()) {
         if (aw_mgba_load_state(core, load_request.c_str())) {
           std::cout << "Successfully loaded state from: " << load_request << std::endl;
+          // Audio queued before the load belongs to the abandoned timeline.
+          audio.drop_pending();
+          rewind_buffer.reset();
         } else {
           std::cerr << "Failed to load state from: " << load_request << std::endl;
         }
       }
 
-      // Update native C++ Tactical Intel & HD Audio Engine
-      intel.update(probe, nav.context());
-      hd_audio.update(probe);
+      const bool ff_active = window.fast_forward_active();
+      const bool rewind_held = window.rewind_held();
+      const bool rewind_menu_step = window.consume_rewind_step();
 
-      aw_mgba_run_frame(core, hardware.keys_pressed);
-      frames_run++;
-
-      // Check for audio sample rate changes from core (e.g. SOUNDBIAS 32768 Hz <-> 65536 Hz)
-      const unsigned current_rate = aw_mgba_audio_sample_rate(core);
-      if (current_rate != 0 && current_rate != audio.sample_rate()) {
-        audio.set_sample_rate(current_rate);
+      // --- Time travel: hold Backspace (or Y/LT) to step back through the
+      // snapshot ring. The game never advances while rewinding.
+      bool did_rewind = false;
+      if (rewind_held || rewind_menu_step) {
+        if (!rewind_was_held) {
+          std::cout << "Time travel: rewinding (history depth " << rewind_buffer.size() << ")"
+                    << std::endl;
+        }
+        const bool should_step = rewind_menu_step ||
+                                 !rewind_was_held ||
+                                 ++rewind_repeat_counter >= kRewindRepeatFrames;
+        if (should_step) {
+          rewind_repeat_counter = 0;
+          did_rewind = rewind_buffer.rewind_step();
+          if (did_rewind) {
+            // Flush the future timeline's audio, then re-render one frame so
+            // the screen shows the rewound-to moment.
+            audio.drop_pending();
+            aw_mgba_run_frame(core, 0);
+            ++frames_run;
+            aw_mgba_read_audio(core, audio_samples.data(), audio_samples.size() / 2);
+          } else if (!rewind_buffer.disabled() && rewind_menu_step) {
+            std::cout << "Rewind: no history yet - keep playing to build some." << std::endl;
+          }
+        }
+      } else {
+        if (rewind_was_held) {
+          std::cout << "Time travel: resumed play" << std::endl;
+        }
+        rewind_repeat_counter = 0;
       }
+      rewind_was_held = rewind_held;
 
-      // Read audio samples from mGBA core and process through HD Audio Engine
-      const std::size_t samples_read = aw_mgba_read_audio(core, audio_samples.data(), audio_samples.size() / 2);
-      if (samples_read > 0) {
-        hd_audio.mix_audio(audio_samples.data(), samples_read);
-        audio.push_samples(audio_samples.data(), samples_read);
-        total_audio_samples += samples_read;
-      }
+      if (!did_rewind && !rewind_held) {
+        // --- Normal / fast-forward emulation.
+        if (ff_active) {
+          if (!ff_was_active) {
+            // Entering fast-forward: stop 1x playback; samples generated while
+            // fast-forwarding are drained and discarded so nothing ever plays
+            // pitched up or falls behind.
+            audio.drop_pending();
+          }
+          const auto burst_start = clock::now();
+          int burst_frames = 0;
+          do {
+            aw_mgba_run_frame(core, hardware.keys_pressed);
+            ++frames_run;
+            ++burst_frames;
+            aw_mgba_read_audio(core, audio_samples.data(), audio_samples.size() / 2);
+            rewind_buffer.on_frame();
+          } while (burst_frames < kFastForwardBurstMaxFrames &&
+                   (burst_frames < kFastForwardBurstMinFrames ||
+                    clock::now() - burst_start < kFastForwardBurstBudget));
+        } else {
+          if (ff_was_active) {
+            std::cout << "Fast-forward: back to 1x" << std::endl;
+          }
 
-      // Copy mGBA video buffer to PPU framebuffer with R/B channel swapping for Win32 GDI
-      const std::uint32_t* src_buf = mgba_buffer.data();
-      std::uint32_t* dst_buf = ppu.framebuffer.data();
-      for (std::size_t i = 0; i < 240 * 160; ++i) {
-        const std::uint32_t c = src_buf[i];
-        dst_buf[i] = ((c & 0x000000FF) << 16) | (c & 0x0000FF00) | ((c & 0x00FF0000) >> 16);
+          // Update native C++ Tactical Intel & HD Audio Engine
+          intel.update(probe, nav.context());
+          hd_audio.update(probe);
+
+          aw_mgba_run_frame(core, hardware.keys_pressed);
+          frames_run++;
+          rewind_buffer.on_frame();
+
+          // Check for audio sample rate changes from core (e.g. SOUNDBIAS 32768 Hz <-> 65536 Hz)
+          const unsigned current_rate = aw_mgba_audio_sample_rate(core);
+          if (current_rate != 0 && current_rate != audio.sample_rate()) {
+            audio.set_sample_rate(current_rate);
+          }
+
+          // Read audio samples from mGBA core and process through HD Audio Engine
+          const std::size_t samples_read = aw_mgba_read_audio(core, audio_samples.data(), audio_samples.size() / 2);
+          if (samples_read > 0) {
+            hd_audio.mix_audio(audio_samples.data(), samples_read);
+            audio.push_samples(audio_samples.data(), samples_read);
+            total_audio_samples += samples_read;
+          }
+        }
       }
+      ff_was_active = ff_active;
+
+      window.set_playback_indicator(rewind_held ? -1 : (ff_active ? 1 : 0));
+
+      copy_video_frame();
 
       // Draw pixel-perfect C++ Tactical Intel HUD overlay if enabled
       if (window.show_hud()) {
@@ -307,16 +434,35 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         }
       }
 
-      // High-precision steady frame pacing for locked 60 FPS
-      next_frame_time += frame_duration_ns;
-      const auto now = clock::now();
-      if (next_frame_time > now) {
-        std::this_thread::sleep_for(next_frame_time - now);
-      } else if (now - next_frame_time > std::chrono::milliseconds(100)) {
-        next_frame_time = now;
+      // Headless self-test: restore two snapshots mid-run and report.
+      if (rewind_smoke && frames_run >= 120 && rewind_smoke_restores == 0) {
+        did_rewind = rewind_buffer.rewind_step();
+        rewind_smoke_restores += did_rewind ? 1 : 0;
+        did_rewind = rewind_buffer.rewind_step();
+        rewind_smoke_restores += did_rewind ? 1 : 0;
+        std::cout << "rewind smoke: restored " << rewind_smoke_restores << "/2 snapshots, ring size "
+                  << rewind_buffer.size() << ", held "
+                  << (rewind_buffer.total_bytes_held() / 1024) << " KB" << std::endl;
+      }
+
+      // High-precision steady frame pacing for locked 60 FPS. Fast-forward
+      // runs unpaced; the clock is re-anchored so 1x resumes without a stall.
+      if (ff_active) {
+        next_frame_time = clock::now();
+      } else {
+        next_frame_time += frame_duration_ns;
+        const auto now = clock::now();
+        if (next_frame_time > now) {
+          std::this_thread::sleep_for(next_frame_time - now);
+        } else if (now - next_frame_time > std::chrono::milliseconds(100)) {
+          next_frame_time = now;
+        }
       }
 
       if (max_frames > 0 && frames_run >= static_cast<std::uint64_t>(max_frames)) {
+        break;
+      }
+      if (rewind_smoke && rewind_smoke_restores > 0 && frames_run >= 150) {
         break;
       }
     }
@@ -346,7 +492,8 @@ int main(int argc, char** argv) {
     aw::RomImage rom = aw::load_rom_file(options.rom_path);
 
     if (options.play_enabled) {
-      run_game_loop(options.rom_path, rom, options.max_frames, options.oam_log_path);
+      run_game_loop(options.rom_path, rom, options.max_frames, options.oam_log_path,
+                    options.rewind_smoke);
     }
   } catch (const std::exception& e) {
     std::cerr << "Fatal error: " << e.what() << std::endl;

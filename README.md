@@ -11,6 +11,8 @@
 ## ✨ Features (v0.1 Alpha)
 
 - 🎮 **Fully Playable Native Engine**: Native executable rendering at 60 FPS with hardware input mapping.
+- ⏪ **Instant Turn Rewind (Time Travel)**: Hold `Backspace` to rewind moves, attacks, or entire turns through an in-RAM savestate ring — no savestate files, no reloads.
+- ⚡ **Zero-Latency Fast-Forward**: Hold `Tab` (or a controller trigger) to blast through AI turns at hundreds of FPS with clean, pitch-correct 1x audio on release.
 - 🔊 **Full Audio Backend**: 16-bit stereo PCM audio synthesis via integrated mGBA core bridge and low-latency Windows `waveOut` audio pipeline.
 - 🖼️ **Software & Windowed Renderer**: High-performance pixel pipeline supporting standard GBA display modes, tile layers, and sprite rendering.
 - 🛠️ **Cross-Platform Toolchain**: Built with CMake & Ninja, supporting Clang, GCC, and MSVC.
@@ -24,11 +26,22 @@
 | :--- | :--- |
 | **D-Pad Up / Down / Left / Right** | Arrow Keys (`Up` / `Down` / `Left` / `Right`) |
 | **Button A** | `Z` / `Space` |
-| **Button B** | `X` / `Backspace` |
+| **Button B** | `X` |
 | **Start** | `Enter` |
 | **Select** | `Shift` |
-| **L Shoulder** | `A` |
-| **R Shoulder** | `S` |
+| **L Shoulder** | `Q` |
+| **R Shoulder** | `E` |
+
+### ⏪ Time Travel & Fast-Forward
+
+| Action | Keyboard | XInput Controller |
+| :--- | :--- | :--- |
+| **Instant Rewind** (hold to step back ~1/3 s per step, release to resume) | `Backspace` (hold) | `Y` or `LT` (hold) |
+| **Fast-Forward** (hold for max-speed emulation, release for 1x) | `Tab` (hold) | `X` or `RT` (hold) |
+
+- Rewind keeps an in-RAM savestate ring (~80 s of history by default; no disk I/O, no savestate slots touched). Holding rewinds through your last moves, attacks, or entire turns; releasing resumes play from that point.
+- Fast-forward mutes timeline audio while held (no pitch distortion, no drifting sync) and returns to clean 1x playback on release. Both modes show their state in the window title, and are also available from the **File** menu.
+- Tunable in `config.ini` under `[Rewind]`: `enabled`, `snapshot_interval` (frames between snapshots), `capacity` (ring size).
 
 ---
 

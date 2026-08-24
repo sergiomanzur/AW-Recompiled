@@ -64,26 +64,9 @@ Audio::~Audio() {
 void Audio::set_sample_rate(int sample_rate) {
   if (!is_active_ || sample_rate <= 0 || sample_rate == sample_rate_) return;
 
-  auto hwave = static_cast<HWAVEOUT>(hwaveout_);
-
-  // Stop playback and return all queued blocks to us.
-  waveOutReset(hwave);
-  for (int i = 0; i < kNumBuffers; ++i) {
-    if (wave_headers_[i] == nullptr) continue;
-    auto* hdr = static_cast<WAVEHDR*>(wave_headers_[i]);
-    if (hdr->dwFlags & WHDR_PREPARED) {
-      waveOutUnprepareHeader(hwave, hdr, sizeof(WAVEHDR));
-    }
-    hdr->dwFlags = 0;
-    hdr->dwBufferLength = 0;
-  }
-
-  // Samples still in the ring buffer were generated at the old rate; drop them.
-  ring_head_ = 0;
-  ring_tail_ = 0;
-  current_buffer_ = 0;
-
-  waveOutClose(hwave);
+  // Stop playback and drop everything queued at the old rate.
+  reset_streams();
+  waveOutClose(static_cast<HWAVEOUT>(hwaveout_));
   hwaveout_ = nullptr;
   is_active_ = false;
 
@@ -102,6 +85,32 @@ void Audio::set_sample_rate(int sample_rate) {
     is_active_ = true;
     sample_rate_ = sample_rate;
   }
+}
+
+void Audio::drop_pending() {
+  if (!is_active_) return;
+  reset_streams();
+}
+
+void Audio::reset_streams() {
+  if (hwaveout_ == nullptr) return;
+  auto hwave = static_cast<HWAVEOUT>(hwaveout_);
+
+  // Stop playback and return all queued blocks to us.
+  waveOutReset(hwave);
+  for (int i = 0; i < kNumBuffers; ++i) {
+    if (wave_headers_[i] == nullptr) continue;
+    auto* hdr = static_cast<WAVEHDR*>(wave_headers_[i]);
+    if (hdr->dwFlags & WHDR_PREPARED) {
+      waveOutUnprepareHeader(hwave, hdr, sizeof(WAVEHDR));
+    }
+    hdr->dwFlags = 0;
+    hdr->dwBufferLength = 0;
+  }
+
+  ring_head_ = 0;
+  ring_tail_ = 0;
+  current_buffer_ = 0;
 }
 
 void Audio::update(Memory& memory, std::uint32_t cycles) {
@@ -269,7 +278,9 @@ void Audio::update(Memory& /*memory*/, std::uint32_t /*cycles*/) {}
 void Audio::flush_frame(Memory& /*memory*/) {}
 void Audio::push_samples(const std::int16_t* /*samples*/, int /*count*/) {}
 void Audio::set_sample_rate(int /*sample_rate*/) {}
+void Audio::drop_pending() {}
 void Audio::pump_waveout() {}
+void Audio::reset_streams() {}
 int Audio::queued_frames() const { return 0; }
 std::size_t Audio::ring_queued_frames() const { return 0; }
 

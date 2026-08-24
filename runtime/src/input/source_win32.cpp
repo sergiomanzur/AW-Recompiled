@@ -28,6 +28,15 @@ void Win32InputSource::poll(InputFrame& frame) {
     }
   }
 
+  // Engine hotkeys: Backspace rewinds time, Tab fast-forwards. These are
+  // polled raw so they stay engine-owned even if the GBA bindings change.
+  if (GetAsyncKeyState(VK_BACK) & 0x8000) {
+    frame.hotkeys |= kHotkeyRewind;
+  }
+  if (GetAsyncKeyState(VK_TAB) & 0x8000) {
+    frame.hotkeys |= kHotkeyFastForward;
+  }
+
   // 2. XInput gamepad. Covers Xbox pads, Retroid handhelds and anything else
   //    exposing the XInput interface.
   const int ctrl_idx = mapping_->controller_index;
@@ -47,6 +56,17 @@ void Win32InputSource::poll(InputFrame& frame) {
       if (xstate.Gamepad.sThumbLY < -kDeadZone) frame.gba_keys |= kKeyDown;
       if (xstate.Gamepad.sThumbLX < -kDeadZone) frame.gba_keys |= kKeyLeft;
       if (xstate.Gamepad.sThumbLX > kDeadZone) frame.gba_keys |= kKeyRight;
+
+      // Engine hotkeys on buttons the GBA layout leaves free: Y/X faces plus
+      // the analog triggers (RT feels natural for held fast-forward).
+      if (btns & XINPUT_GAMEPAD_Y) frame.hotkeys |= kHotkeyRewind;
+      if (btns & XINPUT_GAMEPAD_X) frame.hotkeys |= kHotkeyFastForward;
+      if (xstate.Gamepad.bLeftTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD) {
+        frame.hotkeys |= kHotkeyRewind;
+      }
+      if (xstate.Gamepad.bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD) {
+        frame.hotkeys |= kHotkeyFastForward;
+      }
     }
   }
 

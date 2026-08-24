@@ -91,6 +91,19 @@ public:
   void request_save_state(const std::string& path) { pending_save_state_path_ = path; }
   void request_load_state(const std::string& path) { pending_load_state_path_ = path; }
 
+  // Time travel / fast forward. The held flags come from the polled input
+  // frame (Backspace/Tab keyboard, Y/X + triggers on XInput); fast forward
+  // also engages via its menu toggle. Rewind steps once per consume call.
+  bool rewind_held() const { return rewind_held_; }
+  bool fast_forward_active() const { return fast_forward_held_ || fast_forward_latch_; }
+  bool consume_rewind_step();
+  void request_rewind_step() { rewind_step_requested_ = true; }
+  void toggle_fast_forward_latch();
+
+  // -1 = rewinding, 0 = normal, +1 = fast forwarding. Shown in the title bar
+  // so the mode is visible without on-screen clutter.
+  void set_playback_indicator(int indicator);
+
   // File dialog helpers
   static std::string open_file_dialog(void* parent_hwnd = nullptr);
   static std::string open_savestate_dialog(void* parent_hwnd = nullptr);
@@ -120,6 +133,13 @@ private:
   std::string pending_load_state_path_;
   bool f5_key_was_down_ = false;
   bool f9_key_was_down_ = false;
+
+  bool rewind_held_ = false;
+  bool fast_forward_held_ = false;
+  bool fast_forward_latch_ = false;
+  bool rewind_step_requested_ = false;
+  int playback_indicator_ = 0;
+  std::string window_title_;
 
   InputMapping input_mapping_;
 

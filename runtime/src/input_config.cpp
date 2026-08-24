@@ -33,7 +33,9 @@ void InputMapping::reset_to_defaults() {
   // Defaults: Keyboard
   bindings[Gba_A].key_vk      = 'Z';
   bindings[Gba_B].key_vk      = 'X';
-  bindings[Gba_Select].key_vk = 0x08; // VK_BACK
+  // Shift, not Backspace: Backspace is the engine-level Time Travel (rewind)
+  // hotkey and must not double as a GBA button.
+  bindings[Gba_Select].key_vk = 0x10; // VK_SHIFT
   bindings[Gba_Start].key_vk  = 0x0D; // VK_RETURN
   bindings[Gba_Right].key_vk  = 0x27; // VK_RIGHT
   bindings[Gba_Left].key_vk   = 0x25; // VK_LEFT
@@ -80,6 +82,13 @@ void InputMapping::load_from_config(const ConfigFile& config) {
     if (pad > 0) {
       bindings[i].pad_button = static_cast<std::uint16_t>(pad);
     }
+  }
+
+  // Migration: configs written before Backspace became the Time Travel
+  // hotkey still bind Select to VK_BACK (0x08). That would both rewind and
+  // press Select at once, so move those bindings to the new default.
+  if (bindings[Gba_Select].key_vk == 0x08) {
+    bindings[Gba_Select].key_vk = 0x10; // VK_SHIFT
   }
 }
 

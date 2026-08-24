@@ -27,6 +27,11 @@ public:
   // wrong speed and overflows the buffers.
   void set_sample_rate(int sample_rate);
 
+  // Silently discard everything queued for playback. Used when the timeline
+  // jumps (time travel rewind, savestate load) so audio from the abandoned
+  // future never plays, and when fast-forward ends so playback resumes clean.
+  void drop_pending();
+
   bool is_active() const { return is_active_; }
   int sample_rate() const { return sample_rate_; }
 
@@ -36,6 +41,7 @@ public:
 
 private:
   void pump_waveout();
+  void reset_streams();
   std::size_t ring_queued_frames() const;
 
   void* hwaveout_ = nullptr;

@@ -12,17 +12,46 @@
 
 #include <mgba/core/core.h>
 #include <mgba/core/interface.h>
+#include <mgba/core/log.h>
 #include <mgba/core/serialize.h>
 #include <mgba-util/audio-buffer.h>
 #include <mgba-util/image.h>
 #include <mgba-util/vfs.h>
 
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+// mGBA's default logger prints DEBUG lines (BIOS SWI/DMA traces) three times
+// per frame to stdout. Formatting those dominates fast-forward and clutters
+// every diagnostic log, so WARN-and-above go to stderr instead. Set
+// AW_NATIVE_MGBA_LOGS=1 to restore the original chatty logger.
+static void aw_quiet_log(struct mLogger* logger, int category, enum mLogLevel level,
+                         const char* format, va_list args) {
+    if (!(level & (mLOG_FATAL | mLOG_ERROR | mLOG_WARN))) return;
+
+    char buffer[512];
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    fprintf(stderr, "[mgba] %s\n", buffer);
+    (void) logger;
+    (void) category;
+}
+
+static struct mLogger aw_quiet_logger = {
+    .log = aw_quiet_log,
+};
+
+static void aw_install_logger(void) {
+    const char* verbose = getenv("AW_NATIVE_MGBA_LOGS");
+    if (verbose != NULL && strcmp(verbose, "1") == 0) return;
+    mLogSetDefaultLogger(&aw_quiet_logger);
+}
+
 struct mCore* aw_mgba_create(const char* rom_path, void* video_buffer, size_t stride) {
+    aw_install_logger();
+
     struct mCore* core = mCoreFind(rom_path);
     if (!core) {
         fprintf(stderr, "[mgba] mCoreFind returned NULL for %s\n", rom_path);
@@ -167,6 +196,50 @@ int aw_mgba_load_state(struct mCore* core, const char* path) {
         fprintf(stderr, "[mgba] aw_mgba_load_state: mCoreLoadStateNamed failed for %s\n", path);
     }
     return ok ? 1 : 0;
+}
+
+void* aw_mgba_capture_snapshot(struct mCore* core) {
+    if (!core) return NULL;
+
+    // VFileMemChunk starts empty and grows on write, so one call both
+    // allocates and receives the savestate.
+    struct VFile* vf = VFileMemChunk(NULL, 0);
+    if (!vf) {
+        fprintf(stderr, "[mgba] aw_mgba_capture_snapshot: VFileMemChunk failed\n");
+        return NULL;
+    }
+
+    if (!mCoreSaveStateNamed(core, vf, SAVESTATE_SAVEDATA)) {
+        fprintf(stderr, "[mgba] aw_mgba_capture_snapshot: mCoreSaveStateNamed failed\n");
+        vf->close(vf);
+        return NULL;
+    }
+    return vf;
+}
+
+int aw_mgba_restore_snapshot(struct mCore* core, void* snapshot) {
+    if (!core || !snapshot) return 0;
+
+    struct VFile* vf = (struct VFile*) snapshot;
+    vf->seek(vf, 0, SEEK_SET);
+    const bool ok = mCoreLoadStateNamed(core, vf, SAVESTATE_SAVEDATA);
+    if (!ok) {
+        fprintf(stderr, "[mgba] aw_mgba_restore_snapshot: mCoreLoadStateNamed failed\n");
+    }
+    return ok ? 1 : 0;
+}
+
+size_t aw_mgba_snapshot_size(void* snapshot) {
+    if (!snapshot) return 0;
+    struct VFile* vf = (struct VFile*) snapshot;
+    const ssize_t size = vf->size(vf);
+    return size > 0 ? (size_t) size : 0;
+}
+
+void aw_mgba_free_snapshot(void* snapshot) {
+    if (!snapshot) return;
+    struct VFile* vf = (struct VFile*) snapshot;
+    vf->close(vf);
 }
 
 void* aw_mgba_memory_block(struct mCore* core, const char* internal_name, size_t* size_out) {

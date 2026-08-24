@@ -41,6 +41,16 @@ void* aw_mgba_memory_block(struct mCore* core, const char* internal_name, size_t
 int aw_mgba_save_state(struct mCore* core, const char* path);
 int aw_mgba_load_state(struct mCore* core, const char* path);
 
+// In-RAM savestate snapshots for the instant-rewind ring. A snapshot lives in
+// memory only (no disk I/O), so capturing several per second stays cheap.
+// aw_mgba_capture_snapshot returns an opaque handle owned by the caller;
+// restore re-seeks and loads it back into the core; free releases the memory.
+// Returns NULL / 0 on failure. Never frees the core's resources on failure.
+void* aw_mgba_capture_snapshot(struct mCore* core);
+int aw_mgba_restore_snapshot(struct mCore* core, void* snapshot);
+size_t aw_mgba_snapshot_size(void* snapshot);
+void aw_mgba_free_snapshot(void* snapshot);
+
 #ifdef __cplusplus
 }
 #endif

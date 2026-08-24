@@ -40,6 +40,7 @@ add_library(aw_runtime STATIC
   src/probe/oam_tracker.cpp
   src/render/hud_overlay.cpp
   src/render/pointer_overlay.cpp
+  src/rewind.cpp
   src/rom.cpp
   src/tactical_intel.cpp
   src/window.cpp
@@ -287,12 +288,25 @@ add_executable(pointer_overlay_tests
 
 target_include_directories(pointer_overlay_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_CURRENT_BINARY_DIR}/generated
+  ${CMAKE_BINARY_DIR}/generated
 )
 
 target_link_libraries(pointer_overlay_tests PRIVATE aw_runtime)
 
 add_test(NAME pointer_overlay_tests COMMAND pointer_overlay_tests)
+
+add_executable(rewind_tests
+  tests/rewind_tests.cpp
+)
+
+target_include_directories(rewind_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_BINARY_DIR}/generated
+)
+
+target_link_libraries(rewind_tests PRIVATE aw_runtime)
+
+add_test(NAME rewind_tests COMMAND rewind_tests)
 
 add_executable(advance-wars-native
   src/main.cpp
@@ -329,6 +343,16 @@ set_tests_properties(advance_wars_native_double_click_smoke PROPERTIES
   ENVIRONMENT "AW_NATIVE_NO_PAUSE=1"
   TIMEOUT 120
   PASS_REGULAR_EXPRESSION "ROM: ADVANCEWARS AWRE01 Rev 1"
+)
+
+add_test(
+  NAME advance_wars_native_rewind_smoke
+  COMMAND advance-wars-native "${AW_TEST_ROM_PATH}" --frames 200 --rewind-smoke
+)
+set_tests_properties(advance_wars_native_rewind_smoke PROPERTIES
+  ENVIRONMENT "AW_NATIVE_NO_PAUSE=1"
+  TIMEOUT 120
+  PASS_REGULAR_EXPRESSION "rewind smoke: restored 2/2 snapshots"
 )
 
 add_executable(aw-cursor-miner

@@ -28,6 +28,7 @@ void tests_frame_clear_resets_everything() {
   aw::InputFrame frame;
   frame.gba_keys = aw::kKeyA;
   frame.device_dpad = aw::kKeyLeft;
+  frame.hotkeys = aw::kHotkeyRewind | aw::kHotkeyFastForward;
   frame.pointer_count = 1;
   frame.pointers[0].kind = aw::PointerKind::Mouse;
 
@@ -35,8 +36,18 @@ void tests_frame_clear_resets_everything() {
 
   require_equal(frame.gba_keys, std::uint16_t{0}, "keys cleared");
   require_equal(frame.device_dpad, std::uint16_t{0}, "device dpad cleared");
+  require_equal(frame.hotkeys, std::uint16_t{0}, "hotkeys cleared");
   require_equal(frame.pointer_count, std::size_t{0}, "pointer count cleared");
   require_equal(frame.pointers[0].kind == aw::PointerKind::None, true, "pointer reset");
+}
+
+void tests_hotkeys_are_distinct_bits() {
+  require_equal(aw::kHotkeyRewind & aw::kHotkeyFastForward, std::uint16_t{0},
+                "rewind and fast-forward do not overlap");
+  require_equal(aw::kHotkeyMask,
+                static_cast<std::uint16_t>(aw::kHotkeyRewind | aw::kHotkeyFastForward),
+                "hotkey mask covers both bits");
+  require_equal(aw::InputFrame{}.hotkeys, std::uint16_t{0}, "hotkeys start clear");
 }
 
 void tests_primary_pointer_is_first_active() {
@@ -103,6 +114,7 @@ int main() {
   try {
     tests_frame_starts_empty();
     tests_frame_clear_resets_everything();
+    tests_hotkeys_are_distinct_bits();
     tests_primary_pointer_is_first_active();
     tests_dpad_mask_covers_four_directions();
     tests_viewport_maps_corners_and_centre();
