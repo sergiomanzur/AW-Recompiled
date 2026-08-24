@@ -172,6 +172,52 @@ void tests_blocked_axis_recovers_when_target_reverses() {
   require_equal((out.keys & aw::kKeyLeft) != 0, true, "retries after direction change");
 }
 
+void tests_blocked_axis_recovers_after_cooldown() {
+  aw::NavConfig cfg;
+  cfg.blocked_frames = 4;
+  aw::PointerNav nav(cfg);
+
+  FakeGame game;
+  game.frozen = true;  // The game never responds.
+  game.x = 0;
+
+  const int target_x = 200;
+
+  // Drive until the axis gives up and is blocked.
+  for (int i = 0; i < cfg.blocked_frames + 2; ++i) {
+    nav.step(make_input(game, target_x, 0));
+  }
+
+  // The game becomes responsive again, but the target never moved, so there
+  // is no direction flip to exploit. Blocked exists to stop input spam, not
+  // to give up forever: animations and screen transitions routinely outlast
+  // blocked_frames, so the axis must retry on its own within the cooldown
+  // window.
+  game.frozen = false;
+  int frame_of_retry = -1;
+  for (int i = 0; i < aw::PointerNav::kBlockedCooldownFrames + 2; ++i) {
+    const aw::NavOutput out = nav.step(make_input(game, target_x, 0));
+    game.apply(out.keys);
+    if (out.keys & aw::kKeyRight) {
+      frame_of_retry = i;
+      break;
+    }
+  }
+
+  require_equal(frame_of_retry >= 0, true,
+                "blocked axis retries within the cooldown window once the target is reachable again");
+
+  // Having retried, it must keep going and actually reach the target rather
+  // than pressing once and re-blocking.
+  int frames = 0;
+  for (; frames < 300; ++frames) {
+    const aw::NavOutput out = nav.step(make_input(game, target_x, 0));
+    game.apply(out.keys);
+    if (std::abs(game.x - target_x) <= cfg.snap_radius) break;
+  }
+  require_equal(frames < 300, true, "converges after the blocked axis recovers");
+}
+
 void tests_scroll_counts_as_motion() {
   aw::NavConfig cfg;
   cfg.blocked_frames = 4;
@@ -209,6 +255,43 @@ void tests_physical_dpad_disarms_steering() {
   const aw::NavOutput out = nav.step(in);
   require_equal(out.keys & aw::kDpadMask, std::uint16_t{0}, "device dpad wins");
   require_equal(nav.steering(), false, "steering disarmed");
+}
+
+void tests_steering_clears_when_pointer_leaves() {
+  aw::PointerNav nav;
+  FakeGame game;
+  game.x = 100;
+  game.y = 100;
+
+  // Arm it first.
+  nav.step(make_input(game, 200, 100));
+  require_equal(nav.steering(), true, "armed after a normal frame");
+
+  // The pointer leaves the viewport (or the device goes idle): steering()
+  // must stop claiming ownership of the D-pad.
+  aw::NavInput in = make_input(game, 200, 100);
+  in.armed_pointer = false;
+  nav.step(in);
+
+  require_equal(nav.steering(), false, "steering clears once the pointer is no longer armed");
+}
+
+void tests_steering_clears_when_indicator_lost() {
+  aw::PointerNav nav;
+  FakeGame game;
+  game.x = 100;
+  game.y = 100;
+
+  nav.step(make_input(game, 200, 100));
+  require_equal(nav.steering(), true, "armed after a normal frame");
+
+  // The probe loses the indicator (e.g. mid screen-transition): steering()
+  // must stop claiming ownership of the D-pad.
+  aw::NavInput in = make_input(game, 200, 100);
+  in.indicator_found = false;
+  nav.step(in);
+
+  require_equal(nav.steering(), false, "steering clears once the indicator is lost");
 }
 
 void tests_unarmed_pointer_emits_nothing() {
@@ -296,8 +379,11 @@ int main() {
     tests_releases_between_steps();
     tests_blocked_axis_stops_emitting();
     tests_blocked_axis_recovers_when_target_reverses();
+    tests_blocked_axis_recovers_after_cooldown();
     tests_scroll_counts_as_motion();
     tests_physical_dpad_disarms_steering();
+    tests_steering_clears_when_pointer_leaves();
+    tests_steering_clears_when_indicator_lost();
     tests_unarmed_pointer_emits_nothing();
     tests_missing_indicator_emits_nothing();
     tests_unsteerable_context_emits_no_dpad_but_still_clicks();

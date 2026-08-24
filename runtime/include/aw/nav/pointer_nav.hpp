@@ -58,6 +58,13 @@ public:
   // True while the pointer owns the D-pad.
   bool steering() const { return armed_; }
 
+  // Frames a blocked axis waits before retrying on its own, even if the
+  // wanted direction never changes. Blocked exists to stop input spam while
+  // genuinely stuck, not to give up permanently: animations and screen
+  // transitions routinely outlast blocked_frames, so the axis must resume
+  // once the game becomes responsive again. ~0.5 s at 60 fps.
+  static constexpr int kBlockedCooldownFrames = 30;
+
 private:
   enum class Phase : std::uint8_t { Idle, Pressing, Releasing, Blocked };
 
@@ -66,6 +73,7 @@ private:
     std::uint16_t dir = 0;   // Key mask currently being pressed
     int press_frames = 0;
     int release_frames = 0;
+    int blocked_elapsed = 0;  // Frames spent in Phase::Blocked; drives the retry backoff
     int world_at_press = 0;  // Indicator + scroll when the press began
   };
 

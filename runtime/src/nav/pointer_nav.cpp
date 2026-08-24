@@ -18,15 +18,20 @@ std::uint16_t PointerNav::drive_axis(Axis& axis, int error, int world,
   if (std::abs(error) <= cfg_.snap_radius) {
     axis.phase = Phase::Idle;
     axis.dir = 0;
+    axis.blocked_elapsed = 0;
     return 0;
   }
 
   const std::uint16_t wanted = (error > 0) ? positive : negative;
 
-  // A blocked axis retries only when the direction we want changes.
-  if (axis.phase == Phase::Blocked) {
-    if (wanted == axis.dir) return 0;
+  // A blocked axis retries immediately if the wanted direction changes.
+  // Otherwise it falls through to the switch below, which counts down a
+  // cooldown rather than staying silent forever -- the block may have been
+  // caused by a transient animation or screen transition that has since
+  // ended.
+  if (axis.phase == Phase::Blocked && wanted != axis.dir) {
     axis.phase = Phase::Idle;
+    axis.blocked_elapsed = 0;
   }
 
   // Changing direction mid-press restarts the press.
@@ -52,6 +57,7 @@ std::uint16_t PointerNav::drive_axis(Axis& axis, int error, int world,
       }
       if (++axis.press_frames >= cfg_.blocked_frames) {
         axis.phase = Phase::Blocked;
+        axis.blocked_elapsed = 0;
         return 0;
       }
       return axis.dir;
@@ -63,6 +69,12 @@ std::uint16_t PointerNav::drive_axis(Axis& axis, int error, int world,
       return 0;
 
     case Phase::Blocked:
+      // Backoff, not a dead end: retry on our own once the cooldown expires
+      // even if nothing else has changed.
+      if (++axis.blocked_elapsed >= kBlockedCooldownFrames) {
+        axis.phase = Phase::Idle;
+        axis.blocked_elapsed = 0;
+      }
       return 0;
   }
   return 0;
@@ -85,6 +97,11 @@ NavOutput PointerNav::step(const NavInput& in) {
   }
 
   if (!in.armed_pointer || !in.steerable || !in.indicator_found) {
+    // Not actually steering (or no longer sure where the indicator is): drop
+    // the D-pad's authority and the axis state machines together, so
+    // steering() stops lying and no stale world_at_press baseline survives
+    // into whatever comes back into view next.
+    reset();
     return out;
   }
 
