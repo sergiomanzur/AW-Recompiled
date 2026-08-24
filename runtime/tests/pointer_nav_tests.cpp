@@ -30,6 +30,7 @@ struct FakeGame {
   bool frozen = false;
   int held = 0;
   std::uint16_t last_dir = 0;
+  int step = 16;  // Pixels moved per discrete D-pad step on this screen.
 
   void apply(std::uint16_t keys) {
     const std::uint16_t dir = keys & aw::kDpadMask;
@@ -41,10 +42,10 @@ struct FakeGame {
     ++held;
     if (frozen || held < latency) return;
     held = 0;
-    if (dir & aw::kKeyRight) x += 16;
-    if (dir & aw::kKeyLeft) x -= 16;
-    if (dir & aw::kKeyDown) y += 16;
-    if (dir & aw::kKeyUp) y -= 16;
+    if (dir & aw::kKeyRight) x += step;
+    if (dir & aw::kKeyLeft) x -= step;
+    if (dir & aw::kKeyDown) y += step;
+    if (dir & aw::kKeyUp) y -= step;
   }
 };
 
@@ -461,6 +462,91 @@ void tests_unarmed_pointer_suppresses_probe() {
   }
 }
 
+void tests_deadband_scales_with_observed_step() {
+  // On an 8 px grid (e.g. the name-entry letter screen), a deadband fixed at
+  // half a 16 px tile is a full cell wide: "arrived" can mean landing on the
+  // neighbouring letter, which was the user's original complaint. The fix
+  // derives the deadband from the step size PointerNav actually observes on
+  // this screen, so it must tighten to half of 8 (4), not stay pinned at the
+  // config default of 8.
+  aw::PointerNav nav;
+  FakeGame game;
+  game.step = 8;
+  game.x = 0;
+  game.y = 0;
+
+  // Not a multiple of the 8 px step: 101 = 12*8 + 5, so convergence passes
+  // through a state exactly 5 px from the target -- inside the old fixed
+  // deadband (8) but outside the new observed-step deadband (4). Whether the
+  // axis stops there (bug) or takes one more corrective step (fix) is
+  // exactly what this test tells apart.
+  const int target_x = 101;
+  const int target_y = 0;
+
+  int frames = 0;
+  for (; frames < 300; ++frames) {
+    const aw::NavOutput out = nav.step(make_input(game, target_x, target_y));
+    game.apply(out.keys);
+    if (std::abs(game.x - target_x) <= 4) break;
+  }
+
+  require_equal(frames < 300, true,
+                "converges to within half the observed 8px step, not just the 8px config default");
+  require_equal(std::abs(game.x - target_x) <= 4, true,
+                "settles within half the observed step");
+
+  // Once settled, it must stay settled -- no hunting back and forth.
+  for (int i = 0; i < 60; ++i) {
+    const aw::NavOutput out = nav.step(make_input(game, target_x, target_y));
+    require_equal(out.keys & aw::kDpadMask, std::uint16_t{0},
+                  "no dpad emitted after convergence (no oscillation)");
+    game.apply(out.keys);
+  }
+}
+
+void tests_deadband_16px_step_matches_prior_behaviour() {
+  // On the ordinary 16 px map grid, half the observed step (8) is exactly
+  // the old fixed snap_radius default: this screen's convergence behaviour
+  // must be unchanged by the fix.
+  aw::PointerNav nav;
+  FakeGame game;
+  game.step = 16;
+  game.x = 16;
+  game.y = 16;
+
+  const int target_x = 128;
+  const int target_y = 96;
+
+  int frames = 0;
+  for (; frames < 300; ++frames) {
+    const aw::NavOutput out = nav.step(make_input(game, target_x, target_y));
+    game.apply(out.keys);
+    if (std::abs(game.x - target_x) <= 8 && std::abs(game.y - target_y) <= 8) break;
+  }
+
+  require_equal(frames < 300, true, "still converges within the frame budget on a 16px grid");
+  require_equal(std::abs(game.x - target_x) <= 8, true, "x settles within the usual 8px tolerance");
+  require_equal(std::abs(game.y - target_y) <= 8, true, "y settles within the usual 8px tolerance");
+}
+
+void tests_deadband_falls_back_to_snap_radius_before_any_step_observed() {
+  // No step has been observed yet (this is the very first call on a fresh
+  // controller): the axis has no basis for a tighter deadband, so it must
+  // fall back to cfg_.snap_radius exactly, not to e.g. 0 or the floor of 2.
+  aw::NavConfig cfg;
+  cfg.snap_radius = 10;  // Distinct from the usual default (8) and from the
+                         // observed-step floor (2), so whichever one is
+                         // actually in effect is unambiguous.
+  aw::PointerNav nav(cfg);
+  FakeGame game;
+  game.x = 100;
+  game.y = 100;
+
+  const aw::NavOutput out = nav.step(make_input(game, 109, 100));  // 9 px away.
+  require_equal(out.keys & aw::kDpadMask, std::uint16_t{0},
+                "9px is within the 10px snap_radius fallback used before any step is observed");
+}
+
 void tests_reset_clears_state() {
   aw::NavConfig cfg;
   cfg.blocked_frames = 2;
@@ -474,6 +560,37 @@ void tests_reset_clears_state() {
 
   const aw::NavOutput out = nav.step(make_input(game, 200, 0));
   require_equal((out.keys & aw::kKeyRight) != 0, true, "reset clears the blocked axis");
+}
+
+void tests_reset_clears_observed_step() {
+  // A stale step size mined on the previous screen must not leak into
+  // deadband decisions once the screen (and thus the true step size) has
+  // changed.
+  aw::NavConfig cfg;
+  cfg.snap_radius = 10;
+  aw::PointerNav nav(cfg);
+
+  FakeGame game;
+  game.step = 16;
+  game.x = 0;
+  game.y = 0;
+
+  // Drive to convergence so the axis observes a real 16px step.
+  for (int i = 0; i < 100 && std::abs(game.x - 40) > 8; ++i) {
+    const aw::NavOutput out = nav.step(make_input(game, 40, 0));
+    game.apply(out.keys);
+  }
+
+  nav.reset();
+
+  // Immediately after reset, no step has been (re-)observed yet: 9px away
+  // must fall back to cfg_.snap_radius (10), not the stale 16px screen's
+  // half-step (8) from before the reset.
+  FakeGame fresh_game;
+  fresh_game.x = 100;
+  const aw::NavOutput out = nav.step(make_input(fresh_game, 109, 0));
+  require_equal(out.keys & aw::kDpadMask, std::uint16_t{0},
+                "reset forgets the previous screen's observed step");
 }
 
 }  // namespace
@@ -501,6 +618,10 @@ int main() {
     tests_device_dpad_suppresses_probe();
     tests_unarmed_pointer_suppresses_probe();
     tests_reset_clears_state();
+    tests_deadband_scales_with_observed_step();
+    tests_deadband_16px_step_matches_prior_behaviour();
+    tests_deadband_falls_back_to_snap_radius_before_any_step_observed();
+    tests_reset_clears_observed_step();
     std::cout << "pointer_nav_tests passed!\n";
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';

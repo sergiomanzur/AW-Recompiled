@@ -24,6 +24,8 @@ struct Indicator {
   bool found = false;
   int screen_x = 0;
   int screen_y = 0;
+  int width = 8;
+  int height = 8;
   std::size_t oam_index = kOamEntryCount;
 };
 

@@ -9,7 +9,12 @@ namespace aw {
 struct NavConfig {
   // Frames of unanswered pressing before an axis is declared blocked.
   int blocked_frames = 8;
-  // Error, in screen pixels, that counts as "arrived". Half a 16 px tile.
+  // Fallback "arrived" error, in screen pixels, used only until an axis has
+  // observed a real step size on the current screen (see Axis::observed_step
+  // in PointerNav). Half a 16 px tile -- right for the common 16 px map grid,
+  // wrong (a full cell) for smaller grids such as the name-entry letter
+  // screen, which is exactly why the observed step size overrides it once
+  // available.
   int snap_radius = 8;
   // Frames to release between steps. The game needs a gap to register a
   // second discrete move.
@@ -81,10 +86,26 @@ private:
     int release_frames = 0;
     int blocked_elapsed = 0;  // Frames spent in Phase::Blocked; drives the retry backoff
     int world_at_press = 0;  // Indicator + scroll when the press began
+    // Magnitude of the most recent observed world change caused by a single
+    // press-and-response cycle on this axis -- the game's real per-step size
+    // on the current screen. 0 until a step has actually been observed.
+    // Tracked per axis rather than shared: the two axes are driven
+    // independently (Axis::phase, world_at_press, etc. are all per-axis
+    // already), and a grid need not be square, so folding both into one
+    // value would let a large step on one axis needlessly widen the
+    // deadband -- and thus the "wrong cell" error -- on the other.
+    int observed_step = 0;
   };
 
   std::uint16_t drive_axis(Axis& axis, int error, int world,
                            std::uint16_t positive, std::uint16_t negative);
+
+  // The deadband ("arrived") radius for one axis: half its most recently
+  // observed step size, which is exactly the largest error a single step can
+  // leave behind -- any smaller and an axis can overshoot back and forth
+  // forever (press, land past the target, press back, land past it again).
+  // Falls back to cfg_.snap_radius until a step has been observed.
+  int effective_deadband(const Axis& axis) const;
 
   // Emits a low-rate exploratory D-pad pulse while no indicator is locked.
   // Never presses continuously -- a held direction would run the game's own

@@ -17,6 +17,8 @@ struct OamEntry {
   int tile = 0;          // Character name, attr2 bits 0-9
   int palette = 0;       // Palette bank, attr2 bits 12-15
   int priority = 0;      // attr2 bits 10-11
+  int width = 8;         // Sprite width in pixels, from attr0 shape / attr1 size
+  int height = 8;        // Sprite height in pixels, from attr0 shape / attr1 size
   bool visible = false;  // Not in the disabled object mode
 
   bool on_screen() const {

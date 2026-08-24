@@ -139,6 +139,52 @@ void tests_tile_field_uses_full_ten_bits() {
   require_equal(aw::decode_oam_entry(oam.bytes.data(), 1).tile, 0x3FF, "tile all ten bits round-trip");
 }
 
+void tests_object_size_square_16x16() {
+  // shape=0 (square), size=1 -> 16x16. attr0 bits 14-15 hold shape, attr1
+  // bits 14-15 hold size; neither overlaps the y/x/mode fields those tests
+  // above already exercise.
+  OamBuffer oam;
+  oam.set(0, /*attr0=*/static_cast<std::uint16_t>(50 | (0u << 14)),
+          /*attr1=*/static_cast<std::uint16_t>(60 | (1u << 14)), /*attr2=*/0);
+  const aw::OamEntry e = aw::decode_oam_entry(oam.bytes.data(), 0);
+  require_equal(e.width, 16, "square size1 width");
+  require_equal(e.height, 16, "square size1 height");
+}
+
+void tests_object_size_horizontal_16x8() {
+  // shape=1 (horizontal), size=0 -> 16x8. Width and height differ, which is
+  // exactly what a width/height swap in the decode table would get backwards
+  // (see mutation M8).
+  OamBuffer oam;
+  oam.set(0, /*attr0=*/static_cast<std::uint16_t>(50 | (1u << 14)),
+          /*attr1=*/static_cast<std::uint16_t>(60 | (0u << 14)), /*attr2=*/0);
+  const aw::OamEntry e = aw::decode_oam_entry(oam.bytes.data(), 0);
+  require_equal(e.width, 16, "horizontal size0 width");
+  require_equal(e.height, 8, "horizontal size0 height");
+}
+
+void tests_object_size_vertical_8x32() {
+  // shape=2 (vertical), size=1 -> 8x32.
+  OamBuffer oam;
+  oam.set(0, /*attr0=*/static_cast<std::uint16_t>(50 | (2u << 14)),
+          /*attr1=*/static_cast<std::uint16_t>(60 | (1u << 14)), /*attr2=*/0);
+  const aw::OamEntry e = aw::decode_oam_entry(oam.bytes.data(), 0);
+  require_equal(e.width, 8, "vertical size1 width");
+  require_equal(e.height, 32, "vertical size1 height");
+}
+
+void tests_object_shape_prohibited_falls_back_to_8x8() {
+  // shape=3 is prohibited by GBA hardware. Pin the fallback to 8x8 even with
+  // non-zero size bits, so an OAM entry that (legitimately or not) encodes
+  // shape 3 never produces a bogus or out-of-table size.
+  OamBuffer oam;
+  oam.set(0, /*attr0=*/static_cast<std::uint16_t>(50 | (3u << 14)),
+          /*attr1=*/static_cast<std::uint16_t>(60 | (2u << 14)), /*attr2=*/0);
+  const aw::OamEntry e = aw::decode_oam_entry(oam.bytes.data(), 0);
+  require_equal(e.width, 8, "prohibited shape falls back to 8 width");
+  require_equal(e.height, 8, "prohibited shape falls back to 8 height");
+}
+
 void tests_out_of_range_index_is_invisible() {
   OamBuffer oam;
   const aw::OamEntry e = aw::decode_oam_entry(oam.bytes.data(), aw::kOamEntryCount);
@@ -162,6 +208,10 @@ int main() {
     tests_offscreen_y_is_not_on_screen();
     tests_on_screen_horizontal_bounds();
     tests_tile_field_uses_full_ten_bits();
+    tests_object_size_square_16x16();
+    tests_object_size_horizontal_16x8();
+    tests_object_size_vertical_8x32();
+    tests_object_shape_prohibited_falls_back_to_8x8();
     tests_out_of_range_index_is_invisible();
     tests_null_buffer_is_invisible();
     std::cout << "oam_tests passed!\n";

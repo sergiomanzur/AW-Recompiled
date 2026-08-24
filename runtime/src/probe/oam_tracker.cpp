@@ -58,6 +58,8 @@ Indicator OamTracker::find_by_signature(const std::uint8_t* oam) {
       result.found = true;
       result.screen_x = anchored.x;
       result.screen_y = anchored.y;
+      result.width = anchored.width;
+      result.height = anchored.height;
       result.oam_index = locked_index_;
       return result;
     }
@@ -73,6 +75,8 @@ Indicator OamTracker::find_by_signature(const std::uint8_t* oam) {
     result.found = true;
     result.screen_x = e.x;
     result.screen_y = e.y;
+    result.width = e.width;
+    result.height = e.height;
     result.oam_index = i;
     locked_index_ = i;
     return result;  // Lowest index wins.

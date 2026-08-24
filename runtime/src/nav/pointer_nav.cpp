@@ -2,6 +2,7 @@
 
 #include "aw/hardware.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 
 namespace aw {
@@ -13,10 +14,15 @@ void PointerNav::reset() {
   probe_elapsed_ = 0;
 }
 
+int PointerNav::effective_deadband(const Axis& axis) const {
+  if (axis.observed_step <= 0) return cfg_.snap_radius;
+  return std::max(2, axis.observed_step / 2);
+}
+
 std::uint16_t PointerNav::drive_axis(Axis& axis, int error, int world,
                                      std::uint16_t positive, std::uint16_t negative) {
   // Arrived: stand down.
-  if (std::abs(error) <= cfg_.snap_radius) {
+  if (std::abs(error) <= effective_deadband(axis)) {
     axis.phase = Phase::Idle;
     axis.dir = 0;
     axis.blocked_elapsed = 0;
@@ -50,8 +56,11 @@ std::uint16_t PointerNav::drive_axis(Axis& axis, int error, int world,
 
     case Phase::Pressing:
       if (world != axis.world_at_press) {
-        // The game responded. Release for a frame so the next press registers
-        // as a distinct move.
+        // The game responded. Record how far it actually moved: that
+        // magnitude is this screen's real step size, which sets next call's
+        // deadband (see effective_deadband()). Release for a frame so the
+        // next press registers as a distinct move.
+        axis.observed_step = std::abs(world - axis.world_at_press);
         axis.phase = Phase::Releasing;
         axis.release_frames = 0;
         return 0;

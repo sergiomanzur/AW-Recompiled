@@ -62,6 +62,13 @@ private:
   std::uint16_t last_emitted_dpad_ = 0;
   bool symbols_loaded_ = false;
 
+  // Latches true while the pointer is arming steering: set on a frame where
+  // the primary pointer is in-viewport and moved, held true across
+  // subsequent motionless frames (motion arms, it need not sustain), and
+  // cleared when the pointer leaves the viewport, disappears, a physical
+  // D-pad is held, or on reset(). See update() for the full rationale.
+  bool pointer_armed_ = false;
+
   // AW_NAV_DEBUG=1 logs a one-line status roughly once per second. Kept in
   // the shipped binary, off by default: a real run can be diagnosed without
   // a rebuild.
