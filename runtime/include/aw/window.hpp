@@ -2,6 +2,8 @@
 
 #include "aw/config_file.hpp"
 #include "aw/hardware.hpp"
+#include "aw/input/input_frame.hpp"
+#include "aw/input/source_win32.hpp"
 #include "aw/input_config.hpp"
 #include "aw/ppu.hpp"
 #include <string>
@@ -77,12 +79,11 @@ public:
 
   void set_pending_rom(const std::string& path) { pending_rom_path_ = path; }
 
+  // The neutral frame produced by this window's input sources each poll.
+  const InputFrame& input_frame() const { return input_frame_; }
+
 private:
   void update_menu_checks();
-
-  // Convert window client coordinates to GBA screen coordinates (0-239, 0-159).
-  // Returns false if the position is outside the game viewport.
-  bool client_to_gba(int client_x, int client_y, int& gba_x, int& gba_y) const;
 
   void* hwnd_ = nullptr;
   void* hdc_ = nullptr;
@@ -96,6 +97,9 @@ private:
   std::string pending_rom_path_;
 
   InputMapping input_mapping_;
+
+  Win32InputSource win32_input_;
+  InputFrame input_frame_;
 
   // High-resolution & Scale2x filtering buffers
   std::vector<std::uint32_t> scale2x_buffer_;

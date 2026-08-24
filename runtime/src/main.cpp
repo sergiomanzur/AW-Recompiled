@@ -6,6 +6,7 @@
 #include "aw/cpu_state.hpp"
 #include "aw/generated_blocks.hpp"
 #include "aw/hardware.hpp"
+#include "aw/nav/nav_controller.hpp"
 #include "aw/ppu.hpp"
 #include "aw/probe/backend_mgba.hpp"
 #include "aw/probe/oam.hpp"
@@ -171,6 +172,15 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
     }
 
     aw::MgbaProbeBackend probe(core);
+
+    // NavController stays free of mGBA/Windows dependencies (Spec 2/3 reuse
+    // it on SDL and Android), so main.cpp owns the concrete backend and
+    // wires it in explicitly rather than the controller constructing one
+    // itself.
+    aw::NavController nav;
+    nav.set_backend(probe);
+    nav.load_symbols(aw::sha1_hex(rom.bytes));
+
     std::ofstream oam_log;
     std::vector<aw::OamEntry> oam_prev(aw::kOamEntryCount);
     if (!oam_log_path.empty()) {
@@ -201,12 +211,19 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         if (!core) {
           throw std::runtime_error("aw_mgba_create failed for new ROM: " + rom_path.string());
         }
+        // The backend caches raw block pointers that belong to the old core;
+        // re-resolve them, then drop any tracking state that referred to the
+        // previous ROM's OAM/context.
+        probe.set_core(core);
+        nav.reset();
       }
 
       hardware.keys_pressed = 0;
       if (!window.process_events(hardware)) {
         break;
       }
+
+      hardware.keys_pressed |= nav.update(window.input_frame());
 
       aw_mgba_run_frame(core, hardware.keys_pressed);
       frames_run++;

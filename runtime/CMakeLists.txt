@@ -26,8 +26,10 @@ add_library(aw_runtime STATIC
   src/cpu_state.cpp
   src/hardware.cpp
   src/input_config.cpp
+  src/input/source_win32.cpp
   src/input/viewport.cpp
   src/memory.cpp
+  src/nav/nav_controller.cpp
   src/nav/pointer_nav.cpp
   src/ppu.cpp
   src/probe/backend_mgba.cpp

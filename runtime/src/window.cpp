@@ -1,7 +1,5 @@
 #include "aw/window.hpp"
 
-#include "aw/input/viewport.hpp"
-
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -717,11 +715,6 @@ std::string Window::open_file_dialog(void* parent_hwnd) {
   return "";
 }
 
-bool Window::client_to_gba(int client_x, int client_y, int& gba_x, int& gba_y) const {
-  const ViewportRect& vp = cached_viewport_;
-  return viewport_to_gba(vp.x, vp.y, vp.width, vp.height, client_x, client_y, gba_x, gba_y);
-}
-
 bool Window::process_events(Hardware& hardware) {
   if (!is_open_) return false;
 
@@ -735,38 +728,14 @@ bool Window::process_events(Hardware& hardware) {
     DispatchMessageA(&msg);
   }
 
-  // 1. Evaluate Keyboard Key State (Async Key State tracking for 100% reliable input)
-  for (int i = 0; i < Gba_Count; ++i) {
-    const std::uint32_t vk = input_mapping_.bindings[i].key_vk;
-    if (vk != 0 && (GetAsyncKeyState(static_cast<int>(vk)) & 0x8000)) {
-      hardware.keys_pressed |= (1u << i);
-    }
-  }
+  input_frame_.clear();
+  win32_input_.set_window(hwnd_);
+  win32_input_.set_mapping(&input_mapping_);
+  win32_input_.set_viewport(cached_viewport_.x, cached_viewport_.y,
+                            cached_viewport_.width, cached_viewport_.height);
+  win32_input_.poll(input_frame_);
 
-  // 2. Poll Selected XInput Gamepad Device
-  const int ctrl_idx = input_mapping_.controller_index;
-  if (ctrl_idx >= 0 && ctrl_idx < 4) {
-    XINPUT_STATE xstate;
-    std::memset(&xstate, 0, sizeof(XINPUT_STATE));
-    if (XInputGetState(static_cast<DWORD>(ctrl_idx), &xstate) == ERROR_SUCCESS) {
-      const WORD btns = xstate.Gamepad.wButtons;
-
-      for (int i = 0; i < Gba_Count; ++i) {
-        const std::uint16_t pad_mask = input_mapping_.bindings[i].pad_button;
-        if (pad_mask != 0 && (btns & pad_mask)) {
-          hardware.keys_pressed |= (1u << i);
-        }
-      }
-
-      // Analog Thumbstick to D-Pad mapping with deadzone
-      constexpr SHORT kDeadZone = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
-      if (xstate.Gamepad.sThumbLY > kDeadZone) hardware.keys_pressed |= kKeyUp;
-      if (xstate.Gamepad.sThumbLY < -kDeadZone) hardware.keys_pressed |= kKeyDown;
-      if (xstate.Gamepad.sThumbLX < -kDeadZone) hardware.keys_pressed |= kKeyLeft;
-      if (xstate.Gamepad.sThumbLX > kDeadZone) hardware.keys_pressed |= kKeyRight;
-    }
-  }
-
+  hardware.keys_pressed |= input_frame_.gba_keys;
   return is_open_;
 }
 
@@ -899,7 +868,6 @@ void Window::resize_client(int /*width*/, int /*height*/) {}
 std::string Window::consume_pending_rom() { return ""; }
 std::string Window::open_file_dialog(void* /*parent_hwnd*/) { return ""; }
 void Window::update_menu_checks() {}
-bool Window::client_to_gba(int /*client_x*/, int /*client_y*/, int& /*gba_x*/, int& /*gba_y*/) const { return false; }
 
 #endif
 
