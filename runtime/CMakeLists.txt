@@ -28,6 +28,7 @@ add_library(aw_runtime STATIC
   src/input_config.cpp
   src/input/viewport.cpp
   src/memory.cpp
+  src/nav/pointer_nav.cpp
   src/ppu.cpp
   src/probe/backend_mgba.cpp
   src/probe/context.cpp
@@ -246,6 +247,19 @@ target_include_directories(context_probe_tests PRIVATE
 target_link_libraries(context_probe_tests PRIVATE aw_runtime)
 
 add_test(NAME context_probe_tests COMMAND context_probe_tests)
+
+add_executable(pointer_nav_tests
+  tests/pointer_nav_tests.cpp
+)
+
+target_include_directories(pointer_nav_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
+)
+
+target_link_libraries(pointer_nav_tests PRIVATE aw_runtime)
+
+add_test(NAME pointer_nav_tests COMMAND pointer_nav_tests)
 
 add_executable(advance-wars-native
   src/main.cpp
