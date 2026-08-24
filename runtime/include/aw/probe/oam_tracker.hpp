@@ -61,6 +61,9 @@ private:
                                              // the lock, so a decoy that stalls or
                                              // starts reversing doesn't get reported
                                              // forever.
+  static constexpr int kMinStepPixels = 4;  // Smaller motion is animation creep
+                                             // (scrolling text, unit idle
+                                             // animations), not a cursor step
   static constexpr int kMaxStepPixels = 32; // Larger jumps are not cursor steps
   static constexpr int kUnlockFrames = 60;  // Frames absent before re-locking
   static constexpr std::size_t kMaxCandidates = 32;

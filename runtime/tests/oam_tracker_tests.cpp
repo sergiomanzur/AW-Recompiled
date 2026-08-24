@@ -242,6 +242,82 @@ void tests_max_step_pixels_boundary() {
   }
 }
 
+void tests_animation_creep_never_locks_even_over_many_frames() {
+  aw::OamTracker tracker;  // No signature set; correlation only.
+
+  OamBuffer oam;
+  int x = 32;
+  oam.place(5, x, 64, /*tile=*/0x111, /*palette=*/1);
+  tracker.update(oam.bytes.data(), 0);
+
+  // 2 px/frame in the commanded direction is animation creep (scrolling
+  // text, a unit's idle animation), not a cursor step. Even many frames of
+  // consistent "agreement" at this magnitude must never accumulate enough
+  // score to lock -- unlike a stuck-then-recovering axis, this is not a
+  // matter of waiting longer.
+  for (int i = 0; i < 100; ++i) {
+    x += 2;
+    oam.place(5, x, 64, 0x111, 1);
+    tracker.update(oam.bytes.data(), aw::kKeyRight);
+  }
+
+  require_equal(tracker.locked(), false, "sub-tile creep never locks, however long it persists");
+}
+
+void tests_tile_sized_step_still_locks() {
+  // Regression guard: the existing tile-sized-step lock path must be
+  // unaffected by the new lower bound.
+  aw::OamTracker tracker;
+  OamBuffer oam;
+  int x = 32;
+  oam.place(5, x, 64, /*tile=*/0x0E0, /*palette=*/1);
+  tracker.update(oam.bytes.data(), 0);
+
+  for (int i = 0; i < 3; ++i) {
+    x += 16;
+    oam.place(5, x, 64, 0x0E0, 1);
+    tracker.update(oam.bytes.data(), aw::kKeyRight);
+  }
+
+  require_equal(tracker.locked(), true, "a 16px tile step still locks");
+  require_equal(tracker.signature().tile, 0x0E0, "locked onto the 16px stepper");
+}
+
+void tests_min_step_pixels_boundary() {
+  {
+    aw::OamTracker tracker;
+    OamBuffer oam;
+    int x = 0;
+    oam.place(4, x, 50, /*tile=*/0x0C0, /*palette=*/2);
+    tracker.update(oam.bytes.data(), 0);
+
+    // A step of exactly kMinStepPixels (4) still counts as evidence.
+    for (int i = 0; i < 3; ++i) {
+      x += 4;
+      oam.place(4, x, 50, 0x0C0, 2);
+      tracker.update(oam.bytes.data(), aw::kKeyRight);
+    }
+    require_equal(tracker.locked(), true, "a 4px step is accepted");
+    require_equal(tracker.signature().tile, 0x0C0, "locked onto the 4px stepper");
+  }
+  {
+    aw::OamTracker tracker;
+    OamBuffer oam;
+    int x = 0;
+    oam.place(4, x, 50, /*tile=*/0x0D0, /*palette=*/2);
+    tracker.update(oam.bytes.data(), 0);
+
+    // A step of 3px (just under kMinStepPixels) must never contribute to
+    // the score, no matter how many frames it repeats.
+    for (int i = 0; i < 6; ++i) {
+      x += 3;
+      oam.place(4, x, 50, 0x0D0, 2);
+      tracker.update(oam.bytes.data(), aw::kKeyRight);
+    }
+    require_equal(tracker.locked(), false, "a 3px step never locks");
+  }
+}
+
 void tests_stale_signature_drops_then_recorrelates() {
   aw::OamTracker tracker;
   tracker.set_signature({/*tile=*/0x555, /*palette=*/1});
@@ -316,6 +392,9 @@ int main() {
     tests_correlation_ignores_sprites_moving_the_wrong_way();
     tests_correlation_ignores_ambiguous_diagonal_chords();
     tests_max_step_pixels_boundary();
+    tests_animation_creep_never_locks_even_over_many_frames();
+    tests_tile_sized_step_still_locks();
+    tests_min_step_pixels_boundary();
     tests_stale_signature_drops_then_recorrelates();
     tests_indicator_absent_is_reported_not_crashed();
     tests_null_oam_is_safe();

@@ -98,12 +98,20 @@ void OamTracker::correlate(const std::uint8_t* oam, std::uint16_t emitted_dpad) 
     const int dx = cur.x - prev.x;
     const int dy = cur.y - prev.y;
     if (dx == 0 && dy == 0) continue;
-    if (std::abs(dx) > kMaxStepPixels || std::abs(dy) > kMaxStepPixels) continue;
 
-    const bool agrees = (right && dx > 0) || (left && dx < 0) ||
-                        (down && dy > 0) || (up && dy < 0);
-    const bool opposes = (right && dx < 0) || (left && dx > 0) ||
-                         (down && dy < 0) || (up && dy > 0);
+    // A tile cursor moves in roughly tile-sized steps (16 px on this game's
+    // map grid). Scrolling text and unit idle animations creep only 1-3 px
+    // per frame, so require the axis being judged to sit within
+    // [kMinStepPixels, kMaxStepPixels] before its motion counts as evidence
+    // either way -- too small is animation creep, too large is a scene jump,
+    // neither is a cursor step.
+    const bool x_is_step = std::abs(dx) >= kMinStepPixels && std::abs(dx) <= kMaxStepPixels;
+    const bool y_is_step = std::abs(dy) >= kMinStepPixels && std::abs(dy) <= kMaxStepPixels;
+
+    const bool agrees = (right && dx > 0 && x_is_step) || (left && dx < 0 && x_is_step) ||
+                        (down && dy > 0 && y_is_step) || (up && dy < 0 && y_is_step);
+    const bool opposes = (right && dx < 0 && x_is_step) || (left && dx > 0 && x_is_step) ||
+                         (down && dy < 0 && y_is_step) || (up && dy > 0 && y_is_step);
     if (!agrees && !opposes) continue;
     // A held diagonal chord (e.g. Right+Down) can agree on one axis and
     // oppose on the other simultaneously. That frame is ambiguous for this

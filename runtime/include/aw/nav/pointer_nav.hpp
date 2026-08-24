@@ -14,6 +14,12 @@ struct NavConfig {
   // Frames to release between steps. The game needs a gap to register a
   // second discrete move.
   int release_frames = 1;
+  // While armed and steerable but with no indicator locked yet, PointerNav
+  // emits a single one-frame exploratory D-pad pulse every this many frames
+  // (and nothing on the frames between) so a mouse-only player still
+  // generates the motion OamTracker's correlation needs for a first lock.
+  // Unused once an indicator is found.
+  int probe_interval_frames = 10;
 };
 
 // Everything the controller needs for one frame. All positions are GBA screen
@@ -80,10 +86,21 @@ private:
   std::uint16_t drive_axis(Axis& axis, int error, int world,
                            std::uint16_t positive, std::uint16_t negative);
 
+  // Emits a low-rate exploratory D-pad pulse while no indicator is locked.
+  // Never presses continuously -- a held direction would run the game's own
+  // cursor across the map with nothing steering it back.
+  std::uint16_t probe(const NavInput& in);
+
+  // Centre of the GBA screen (240x160), used to pick a probe direction from
+  // where the pointer sits relative to it.
+  static constexpr int kScreenCenterX = 120;
+  static constexpr int kScreenCenterY = 80;
+
   NavConfig cfg_{};
   Axis x_{};
   Axis y_{};
   bool armed_ = false;
+  int probe_elapsed_ = 0;  // Frames since the last exploratory pulse
 };
 
 }  // namespace aw

@@ -355,6 +355,112 @@ void tests_clicks_work_even_when_unarmed() {
   require_equal((nav.step(in).keys & aw::kKeyA) != 0, true, "click without motion");
 }
 
+void tests_probe_pulses_while_no_indicator() {
+  aw::PointerNav nav;
+  FakeGame game;
+  game.x = 0;
+  game.y = 0;
+
+  // Armed, steerable, no lock yet: this must not go silent forever, or a
+  // mouse-only player would never generate the correlation signal needed
+  // for a first lock.
+  aw::NavInput in = make_input(game, 220, 80);
+  in.indicator_found = false;
+
+  int pulses = 0;
+  for (int i = 0; i < 60; ++i) {
+    const aw::NavOutput out = nav.step(in);
+    if ((out.keys & aw::kDpadMask) != 0) ++pulses;
+  }
+
+  // Default probe_interval_frames is 10, so ~6 pulses are expected over 60
+  // frames. Assert a band rather than an exact count so the test isn't
+  // brittle against the phase of the very first pulse.
+  require_equal(pulses >= 3 && pulses <= 10, true,
+                "probe pulses land roughly once per probe_interval_frames");
+}
+
+void check_probe_direction(int target_x, int target_y, std::uint16_t expected_key,
+                            const char* label) {
+  aw::PointerNav nav;
+  FakeGame game;
+  game.x = 0;
+  game.y = 0;
+
+  aw::NavInput in = make_input(game, target_x, target_y);
+  in.indicator_found = false;
+
+  std::uint16_t seen = 0;
+  for (int i = 0; i < 30; ++i) {
+    const aw::NavOutput out = nav.step(in);
+    seen |= out.keys & aw::kDpadMask;
+  }
+
+  require_equal(seen, expected_key, label);
+}
+
+void tests_probe_direction_points_toward_pointer() {
+  // GBA screen is 240x160; centre is (120, 80). The probe should pulse
+  // toward whichever side of centre the pointer sits on, biasing exploration
+  // toward the pointer's actual position rather than pressing arbitrarily.
+  check_probe_direction(220, 80, aw::kKeyRight, "pointer right of centre probes right");
+  check_probe_direction(20, 80, aw::kKeyLeft, "pointer left of centre probes left");
+  check_probe_direction(120, 150, aw::kKeyDown, "pointer below centre probes down");
+  check_probe_direction(120, 10, aw::kKeyUp, "pointer above centre probes up");
+}
+
+void tests_probing_stops_once_indicator_found() {
+  aw::PointerNav nav;
+  FakeGame game;
+  game.x = 100;
+  game.y = 100;
+
+  // The target coincides with the indicator, so it is inside the deadband
+  // immediately: with a real lock, the closed loop has nothing to do and
+  // exploratory probing must not run alongside (or instead of) it.
+  const aw::NavInput in = make_input(game, game.x, game.y);
+
+  for (int i = 0; i < 60; ++i) {
+    const aw::NavOutput out = nav.step(in);
+    require_equal(out.keys & aw::kDpadMask, std::uint16_t{0},
+                  "no probe pulse once an indicator is locked");
+  }
+}
+
+void tests_device_dpad_suppresses_probe() {
+  aw::PointerNav nav;
+  FakeGame game;
+  game.x = 0;
+  game.y = 0;
+
+  aw::NavInput in = make_input(game, 220, 80);
+  in.indicator_found = false;
+  in.device_dpad = aw::kKeyUp;  // A physical device is in use this frame.
+
+  for (int i = 0; i < 60; ++i) {
+    const aw::NavOutput out = nav.step(in);
+    require_equal(out.keys & aw::kDpadMask, std::uint16_t{0},
+                  "physical dpad wins; no exploratory pulse is emitted");
+  }
+}
+
+void tests_unarmed_pointer_suppresses_probe() {
+  aw::PointerNav nav;
+  FakeGame game;
+  game.x = 0;
+  game.y = 0;
+
+  aw::NavInput in = make_input(game, 220, 80);
+  in.armed_pointer = false;
+  in.indicator_found = false;
+
+  for (int i = 0; i < 60; ++i) {
+    const aw::NavOutput out = nav.step(in);
+    require_equal(out.keys & aw::kDpadMask, std::uint16_t{0},
+                  "pointer not armed; no exploratory pulse is emitted");
+  }
+}
+
 void tests_reset_clears_state() {
   aw::NavConfig cfg;
   cfg.blocked_frames = 2;
@@ -389,6 +495,11 @@ int main() {
     tests_unsteerable_context_emits_no_dpad_but_still_clicks();
     tests_click_edges_map_to_a_and_b();
     tests_clicks_work_even_when_unarmed();
+    tests_probe_pulses_while_no_indicator();
+    tests_probe_direction_points_toward_pointer();
+    tests_probing_stops_once_indicator_found();
+    tests_device_dpad_suppresses_probe();
+    tests_unarmed_pointer_suppresses_probe();
     tests_reset_clears_state();
     std::cout << "pointer_nav_tests passed!\n";
   } catch (const std::exception& ex) {

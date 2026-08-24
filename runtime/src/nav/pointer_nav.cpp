@@ -10,6 +10,7 @@ void PointerNav::reset() {
   x_ = {};
   y_ = {};
   armed_ = false;
+  probe_elapsed_ = 0;
 }
 
 std::uint16_t PointerNav::drive_axis(Axis& axis, int error, int world,
@@ -80,6 +81,25 @@ std::uint16_t PointerNav::drive_axis(Axis& axis, int error, int world,
   return 0;
 }
 
+std::uint16_t PointerNav::probe(const NavInput& in) {
+  // Explore at a low duty cycle: one frame pressed, `probe_interval_frames -
+  // 1` frames silent. A held direction would run the game's own cursor
+  // across the map with nothing steering it back, so this must stay a pulse,
+  // never a hold.
+  if (++probe_elapsed_ < cfg_.probe_interval_frames) return 0;
+  probe_elapsed_ = 0;
+
+  // Bias exploration toward the pointer: pick the axis with the larger
+  // offset from screen centre and pulse toward it. Moving the mouse toward a
+  // target is itself what starts walking the cursor that way.
+  const int dx = in.target_x - kScreenCenterX;
+  const int dy = in.target_y - kScreenCenterY;
+  if (std::abs(dx) >= std::abs(dy)) {
+    return (dx >= 0) ? kKeyRight : kKeyLeft;
+  }
+  return (dy >= 0) ? kKeyDown : kKeyUp;
+}
+
 NavOutput PointerNav::step(const NavInput& in) {
   NavOutput out;
 
@@ -96,12 +116,25 @@ NavOutput PointerNav::step(const NavInput& in) {
     return out;
   }
 
-  if (!in.armed_pointer || !in.steerable || !in.indicator_found) {
-    // Not actually steering (or no longer sure where the indicator is): drop
-    // the D-pad's authority and the axis state machines together, so
-    // steering() stops lying and no stale world_at_press baseline survives
-    // into whatever comes back into view next.
+  if (!in.armed_pointer || !in.steerable) {
+    // Not actually steering: drop the D-pad's authority and the axis state
+    // machines together, so steering() stops lying and no stale
+    // world_at_press baseline survives into whatever comes back into view
+    // next.
     reset();
+    return out;
+  }
+
+  if (!in.indicator_found) {
+    // Armed and steerable, but no lock yet. Closed-loop steering is not
+    // possible with no known indicator position, so fall back to
+    // exploratory pulses instead of going silent -- silence is exactly the
+    // bug: it never gives OamTracker's correlation a signal to lock onto, so
+    // a mouse-only player would never see the cursor move on any screen.
+    armed_ = false;
+    x_ = {};
+    y_ = {};
+    out.keys |= probe(in);
     return out;
   }
 
