@@ -24,6 +24,14 @@ bool env_is_set(const char* name) {
   return value != nullptr && std::string(value) == "1";
 }
 
+// GBA OAM reports a sprite's top-left corner, but PointerNav wants the
+// indicator's *centre* so it can be compared directly against the pointer
+// target (a point, not a corner). The game's cursor is one 16x16 tile, so
+// half its extent converts the corner OamTracker reports into that centre.
+// Without this, steering settles with the indicator's top-left corner under
+// the target instead of its middle -- a systematic half-tile offset.
+constexpr int kIndicatorHalfExtent = 8;
+
 }  // namespace
 
 void NavController::reset() {
@@ -115,8 +123,8 @@ std::uint16_t NavController::update(const InputFrame& frame) {
   }
 
   in.indicator_found = indicator_.found;
-  in.indicator_x = indicator_.screen_x;
-  in.indicator_y = indicator_.screen_y;
+  in.indicator_x = indicator_.screen_x + kIndicatorHalfExtent;
+  in.indicator_y = indicator_.screen_y + kIndicatorHalfExtent;
 
   if (scroll_bg >= 0) {
     in.scroll_x = backend_->read_io16(bg_hofs_reg(scroll_bg));

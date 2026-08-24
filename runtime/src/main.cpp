@@ -10,6 +10,7 @@
 #include "aw/ppu.hpp"
 #include "aw/probe/backend_mgba.hpp"
 #include "aw/probe/oam.hpp"
+#include "aw/render/pointer_overlay.hpp"
 #include "aw/rom.hpp"
 #include "aw/window.hpp"
 
@@ -247,6 +248,18 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       for (std::size_t i = 0; i < 240 * 160; ++i) {
         const std::uint32_t c = src_buf[i];
         dst_buf[i] = ((c & 0x000000FF) << 16) | (c & 0x0000FF00) | ((c & 0x00FF0000) >> 16);
+      }
+
+      // Draw the free-floating mouse pointer into our own framebuffer copy
+      // (never into mGBA's VRAM/OAM) at the GBA-space coordinates the mouse
+      // is aiming at. This runs before window.render() so the pointer scales
+      // and letterboxes with the game at every internal resolution, exactly
+      // like everything else in ppu.framebuffer.
+      if (const aw::PointerState* pointer = window.input_frame().primary_pointer()) {
+        if (pointer->kind != aw::PointerKind::None && pointer->in_viewport) {
+          aw::draw_pointer(ppu.framebuffer.data(), aw::kGbaWidth, aw::kGbaHeight,
+                            pointer->gba_x, pointer->gba_y);
+        }
       }
 
       // Render frame to window

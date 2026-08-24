@@ -36,6 +36,7 @@ add_library(aw_runtime STATIC
   src/probe/context.cpp
   src/probe/oam.cpp
   src/probe/oam_tracker.cpp
+  src/render/pointer_overlay.cpp
   src/rom.cpp
   src/window.cpp
   src/mgba_adapter.c
@@ -262,6 +263,19 @@ target_include_directories(pointer_nav_tests PRIVATE
 target_link_libraries(pointer_nav_tests PRIVATE aw_runtime)
 
 add_test(NAME pointer_nav_tests COMMAND pointer_nav_tests)
+
+add_executable(pointer_overlay_tests
+  tests/pointer_overlay_tests.cpp
+)
+
+target_include_directories(pointer_overlay_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
+)
+
+target_link_libraries(pointer_overlay_tests PRIVATE aw_runtime)
+
+add_test(NAME pointer_overlay_tests COMMAND pointer_overlay_tests)
 
 add_executable(advance-wars-native
   src/main.cpp
