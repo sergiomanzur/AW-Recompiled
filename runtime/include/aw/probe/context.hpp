@@ -1,6 +1,7 @@
 #pragma once
 
 #include "aw/probe/backend.hpp"
+#include "aw/probe/cursor_probe.hpp"
 #include "aw/probe/oam_tracker.hpp"
 
 #include <cstdint>
@@ -39,8 +40,15 @@ struct SymbolTable {
   std::string rom_sha1;
   std::vector<ContextRule> contexts;
 
+  // The map cursor's tile-coordinate addresses, mined by aw-cursor-miner.
+  // Unset (x_addr/y_addr both 0) when this ROM revision has no mined
+  // cursor addresses yet; NavController then falls back to OamTracker.
+  CursorAddresses cursor;
+
   // Loads the INI form described in data/symbols/README.md. Returns false and
-  // sets `err` on failure, leaving the table untouched.
+  // sets `err` on failure, leaving the table untouched. A file is valid as
+  // long as it declares at least one context rule or valid cursor addresses
+  // -- either alone is useful, so neither is required for the other.
   bool load_from_file(const std::string& path, std::string& err);
 
   bool matches_rom(const std::string& sha1) const;

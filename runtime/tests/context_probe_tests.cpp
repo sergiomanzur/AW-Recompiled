@@ -159,6 +159,9 @@ void populate_with_sentinel(aw::SymbolTable& table) {
   sentinel.scroll_bg = 3;
   sentinel.steerable = false;
   table.contexts.push_back(sentinel);
+
+  table.cursor.x_addr = 0x03009999;
+  table.cursor.y_addr = 0x0300999B;
 }
 
 void require_sentinel_unchanged(const aw::SymbolTable& table, const char* context) {
@@ -174,6 +177,9 @@ void require_sentinel_unchanged(const aw::SymbolTable& table, const char* contex
   require_equal(static_cast<int>(rule.predicates[0].value), 0x42, context);
   require_equal(rule.scroll_bg, 3, context);
   require_equal(rule.steerable, false, context);
+
+  require_equal(table.cursor.x_addr, static_cast<std::uint32_t>(0x03009999), context);
+  require_equal(table.cursor.y_addr, static_cast<std::uint32_t>(0x0300999B), context);
 }
 
 void tests_missing_file_leaves_populated_table_unchanged() {
@@ -208,6 +214,57 @@ void tests_file_with_no_contexts_leaves_populated_table_unchanged() {
   require_equal(err.empty(), false, "error message set");
 
   require_sentinel_unchanged(table, "no-contexts file");
+}
+
+// A file with only [Rom] and [Cursor] -- no context sections at all -- must
+// load successfully: the mined cursor addresses are useful on their own for
+// exact-coordinate steering, with no context predicates required. This is
+// the behaviour task 9f adds; tests_file_with_no_contexts_leaves_populated_
+// table_unchanged (above) pins that a file with *neither* contexts nor a
+// valid cursor still fails, so this does not weaken that guarantee.
+void tests_cursor_only_file_loads_successfully() {
+  TempIniFile ini("context_probe_tests_cursor_only.ini",
+                  "[Rom]\n"
+                  "sha1 = 15053499D5B3F49128A941D7F2D84876F5424D0C\n"
+                  "\n"
+                  "[Cursor]\n"
+                  "x_addr = 50345636\n"  // 0x030036A4
+                  "y_addr = 50345638\n"  // 0x030036A6
+                  );
+
+  aw::SymbolTable table;
+  std::string err;
+  const bool ok = table.load_from_file(ini.path(), err);
+  require_equal(ok, true, "cursor-only file loads");
+  require_equal(err.empty(), true, "no error on cursor-only success");
+
+  require_equal(table.contexts.empty(), true, "cursor-only file declares no contexts");
+  require_equal(table.cursor.valid(), true, "cursor addresses are valid");
+  require_equal(table.cursor.x_addr, static_cast<std::uint32_t>(50345636), "cursor x_addr");
+  require_equal(table.cursor.y_addr, static_cast<std::uint32_t>(50345638), "cursor y_addr");
+}
+
+// A [Cursor] section with only one of the two addresses set is not enough to
+// steer by (CursorAddresses::valid() requires both), so with no context
+// rules either the file must still be rejected -- the "declares neither"
+// failure path must not be fooled by a half-populated Cursor section.
+void tests_half_set_cursor_with_no_contexts_still_fails() {
+  TempIniFile ini("context_probe_tests_half_cursor.ini",
+                  "[Rom]\n"
+                  "sha1 = FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF\n"
+                  "\n"
+                  "[Cursor]\n"
+                  "x_addr = 50345636\n");  // y_addr omitted -> 0 -> invalid pair
+
+  aw::SymbolTable table;
+  populate_with_sentinel(table);
+
+  std::string err;
+  const bool ok = table.load_from_file(ini.path(), err);
+  require_equal(ok, false, "half-set cursor with no contexts fails");
+  require_equal(err.empty(), false, "error message set");
+
+  require_sentinel_unchanged(table, "half-set cursor file");
 }
 
 // Covers load_from_file's real INI parsing loop end to end, against the
@@ -283,6 +340,13 @@ void tests_load_from_file_parses_documented_format() {
   require_equal(list.signature.palette, -1, "ListMenu indicator palette defaults to wildcard");
   require_equal(list.scroll_bg, -1, "ListMenu scroll_bg defaults to -1");
   require_equal(list.steerable, true, "ListMenu steerable defaults to true when omitted");
+
+  // No [Cursor] section in this file -> cursor addresses default to 0/0,
+  // i.e. unknown, and the table must still have loaded successfully purely
+  // on the strength of its two context rules.
+  require_equal(table.cursor.x_addr, static_cast<std::uint32_t>(0), "cursor x_addr defaults to 0");
+  require_equal(table.cursor.y_addr, static_cast<std::uint32_t>(0), "cursor y_addr defaults to 0");
+  require_equal(table.cursor.valid(), false, "cursor defaults to invalid when section absent");
 }
 
 // classify() is documented to return the first rule in `contexts` whose
@@ -325,6 +389,8 @@ int main() {
     tests_predicate_outside_ewram_never_matches();
     tests_missing_file_leaves_populated_table_unchanged();
     tests_file_with_no_contexts_leaves_populated_table_unchanged();
+    tests_cursor_only_file_loads_successfully();
+    tests_half_set_cursor_with_no_contexts_still_fails();
     tests_load_from_file_parses_documented_format();
     tests_first_matching_rule_wins();
     std::cout << "context_probe_tests passed!\n";

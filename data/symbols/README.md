@@ -26,6 +26,18 @@ adding a JSON dependency for one small data file is not worth it.
 Recognised section names: `MapView`, `ListMenu`, `NameEntry`, `FrontEnd`,
 `Cutscene`. A section with `predicate_addr = 0` (or absent) is skipped.
 
+    [Cursor]
+    x_addr = 50345636   ; 0x030036A4
+    y_addr = 50345638   ; 0x030036A6
+
+Absolute addresses (IWRAM or EWRAM) of the map cursor's tile X/Y coordinates,
+mined by `aw-cursor-miner`. When present, `NavController` steers by exact
+tile arithmetic instead of guessing a sprite's identity via `OamTracker`. A
+table needs at least one of `[Cursor]` or a context section to load
+successfully; a file with only `[Rom]` and `[Cursor]` (no context rules at
+all) is valid on its own, since the mined cursor addresses are useful without
+any context predicates.
+
 Addresses are decimal because `ConfigFile::get_int` does not parse hex. Put the
 hex value in a trailing comment.
 
@@ -33,10 +45,10 @@ Generate these with `aw-symbol-miner` (see `tools/`).
 
 ## Regenerating cursor coordinate addresses
 
-The steering path is moving from a sprite-position guess (`OamTracker`) to
-reading the cursor's tile X/Y directly from RAM. Finding those addresses for
-a given screen (map view, list menu, etc.) is a two-step, human-in-the-loop
-process:
+The steering path moved from a sprite-position guess (`OamTracker`) to
+reading the cursor's tile X/Y directly from RAM (see `[Cursor]` above).
+Finding those addresses for a given screen (map view, list menu, etc.) is a
+two-step, human-in-the-loop process:
 
 1. Run the game normally (`advance-wars-native`), navigate to the screen you
    want to mine (e.g. the in-battle map cursor), and press **F5** while

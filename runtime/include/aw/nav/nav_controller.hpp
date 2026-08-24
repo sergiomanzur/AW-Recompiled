@@ -4,6 +4,7 @@
 #include "aw/nav/pointer_nav.hpp"
 #include "aw/probe/backend.hpp"
 #include "aw/probe/context.hpp"
+#include "aw/probe/cursor_probe.hpp"
 #include "aw/probe/oam_tracker.hpp"
 
 #include <cstdint>
@@ -47,7 +48,25 @@ public:
   Indicator indicator() const { return indicator_; }
 
 private:
-  void debug_log(const NavInput& in, const NavOutput& out);
+  // Extra bits the debug line reports beyond NavInput/NavOutput: which mode
+  // steered this frame, the raw mined tile and computed target tile, and the
+  // raw BG scroll values used to get there. Bundled into one struct rather
+  // than a long debug_log() parameter list.
+  struct DebugFrame {
+    bool exact_mode = false;
+    CursorTile cursor_tile{};
+    int target_tile_x = 0;
+    int target_tile_y = 0;
+    int scroll_x = 0;
+    int scroll_y = 0;
+  };
+
+  void debug_log(const NavInput& in, const NavOutput& out, const DebugFrame& debug);
+
+  // Logs, once, which steering mode load_symbols() just resolved to. Split
+  // out so every load_symbols() return path (no file, ROM mismatch, loaded)
+  // reports the same way instead of duplicating the if/else three times.
+  void log_steering_mode() const;
 
   ProbeBackend* backend_ = nullptr;
   ContextProbe context_probe_;

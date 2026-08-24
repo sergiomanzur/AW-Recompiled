@@ -34,6 +34,7 @@ add_library(aw_runtime STATIC
   src/ppu.cpp
   src/probe/backend_mgba.cpp
   src/probe/context.cpp
+  src/probe/cursor_probe.cpp
   src/probe/oam.cpp
   src/probe/oam_tracker.cpp
   src/render/pointer_overlay.cpp
@@ -250,6 +251,19 @@ target_include_directories(context_probe_tests PRIVATE
 target_link_libraries(context_probe_tests PRIVATE aw_runtime)
 
 add_test(NAME context_probe_tests COMMAND context_probe_tests)
+
+add_executable(cursor_probe_tests
+  tests/cursor_probe_tests.cpp
+)
+
+target_include_directories(cursor_probe_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
+)
+
+target_link_libraries(cursor_probe_tests PRIVATE aw_runtime)
+
+add_test(NAME cursor_probe_tests COMMAND cursor_probe_tests)
 
 add_executable(pointer_nav_tests
   tests/pointer_nav_tests.cpp

@@ -84,8 +84,14 @@ bool SymbolTable::load_from_file(const std::string& path, std::string& err) {
     parsed.contexts.push_back(rule);
   }
 
-  if (parsed.contexts.empty()) {
-    err = "symbol table declares no contexts: " + path;
+  parsed.cursor.x_addr = static_cast<std::uint32_t>(file.get_int("Cursor", "x_addr", 0));
+  parsed.cursor.y_addr = static_cast<std::uint32_t>(file.get_int("Cursor", "y_addr", 0));
+
+  // A table with no context rules is still useful on its own when it carries
+  // mined cursor addresses (exact-coordinate steering needs no context
+  // predicates at all), so only fail when it declares neither.
+  if (parsed.contexts.empty() && !parsed.cursor.valid()) {
+    err = "symbol table declares no contexts or cursor addresses: " + path;
     return false;
   }
 
