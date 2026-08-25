@@ -58,6 +58,11 @@ public:
 
   ContextId context() const { return context_; }
 
+  // The mined cursor addresses loaded by load_symbols() (invalid pair when
+  // this ROM revision has none yet). Shared with engine features that need
+  // the map cursor, like the map sensor and the tactical sidebar.
+  const CursorAddresses& cursor_addresses() const { return context_probe_.table().cursor; }
+
   // The tracker's current view of the game's selection indicator. `.found`
   // reports whether the tracker is currently reporting a position at all.
   Indicator indicator() const { return indicator_; }

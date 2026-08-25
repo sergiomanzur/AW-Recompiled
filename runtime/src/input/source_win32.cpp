@@ -28,13 +28,17 @@ void Win32InputSource::poll(InputFrame& frame) {
     }
   }
 
-  // Engine hotkeys: Backspace rewinds time, Tab fast-forwards. These are
-  // polled raw so they stay engine-owned even if the GBA bindings change.
+  // Engine hotkeys: Backspace rewinds time, Tab fast-forwards, Ctrl+Z undoes
+  // the last order. These are polled raw so they stay engine-owned even if
+  // the GBA bindings change.
   if (GetAsyncKeyState(VK_BACK) & 0x8000) {
     frame.hotkeys |= kHotkeyRewind;
   }
   if (GetAsyncKeyState(VK_TAB) & 0x8000) {
     frame.hotkeys |= kHotkeyFastForward;
+  }
+  if ((GetAsyncKeyState('Z') & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000)) {
+    frame.hotkeys |= kHotkeyUndo;
   }
 
   // 2. XInput gamepad. Covers Xbox pads, Retroid handhelds and anything else
@@ -57,10 +61,12 @@ void Win32InputSource::poll(InputFrame& frame) {
       if (xstate.Gamepad.sThumbLX < -kDeadZone) frame.gba_keys |= kKeyLeft;
       if (xstate.Gamepad.sThumbLX > kDeadZone) frame.gba_keys |= kKeyRight;
 
-      // Engine hotkeys on buttons the GBA layout leaves free: Y/X faces plus
-      // the analog triggers (RT feels natural for held fast-forward).
+      // Engine hotkeys on inputs the GBA layout leaves free: Y/X faces, the
+      // analog triggers (RT feels natural for held fast-forward) and the
+      // left-stick click for undo.
       if (btns & XINPUT_GAMEPAD_Y) frame.hotkeys |= kHotkeyRewind;
       if (btns & XINPUT_GAMEPAD_X) frame.hotkeys |= kHotkeyFastForward;
+      if (btns & XINPUT_GAMEPAD_LEFT_THUMB) frame.hotkeys |= kHotkeyUndo;
       if (xstate.Gamepad.bLeftTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD) {
         frame.hotkeys |= kHotkeyRewind;
       }

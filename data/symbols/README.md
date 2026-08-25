@@ -75,3 +75,54 @@ If the miner reports no candidates for an axis, it is telling you the truth
 rather than fabricating one: recapture the savestate on a screen where the
 D-pad is known to move a cursor, away from a map edge, and not mid-animation,
 then try again.
+
+## Mining beyond the cursor: aw-boot-probe
+
+`runtime/tools/boot_probe.cpp` is the headless mining harness. It boots the
+real core with scripted input and diffs memory (and, where useful, the
+framebuffer) without ever writing game state. Modes:
+
+    aw-boot-probe <rom> boot [--out state.ss] [--max-frames N]
+        Spam Start/A through the front-end until the map cursor answers the
+        D-pad, then save a savestate. Writes bootdump/frame_*.bmp screen
+        dumps, and state_stuck.ss (the screen it stalled on) for the other
+        modes.
+
+    aw-boot-probe <rom> rawprobe <state.ss> "<script>"
+        Replay a key sequence (U/D/L/R/A/B/S, '.' = idle) against a
+        savestate, printing every EWRAM/IWRAM/OAM byte that changed after
+        each press plus a screenshot per press (rawshot_NNN_<key>.bmp).
+
+    aw-boot-probe <rom> gridprobe <state.ss>
+        Find a grid-cursor variable: bytes tracing a clean two-steps-out,
+        two-steps-back walk under R,R,L,L,U,U,D,D.
+
+    aw-boot-probe <rom> namepass <state.ss>
+    aw-boot-probe <rom> tomap <state.ss> [out.ss]
+        Escape the boot-time name entry (the wrap-cycling sequence below)
+        and, for tomap, march on toward the map.
+
+### What is verified so far (Advance Wars USA Rev 1)
+
+| Address        | Meaning                                             | How verified |
+| -------------- | --------------------------------------------------- | ------------ |
+| 0x030036A4/A6  | Map cursor tile X/Y (already in `[Cursor]` above)   | aw-cursor-miner + daily pointer steering |
+| 0x02008032     | Frame tick counter (+1 per emulated frame)          | rawprobe: +8 per 8-frame scripted press |
+| 0x02011CEA/B   | 16-bit RNG seed (churns on input)                   | rawprobe: uncorrelated jumps per press |
+| (behaviour)    | Name-entry grid WRAPS; Right/Down cycle all cells   | rawprobe sweep + visual verification |
+| (behaviour)    | 80xRight + 80xDown + A escapes name entry          | namepass: screen transition verified |
+| (behaviour)    | Portrait animation repaints the full screen every few frames, so naive pixel-diff detectors false-positive | tomap stage-1 debugging |
+
+Still unmined (the sidebar/undo features degrade gracefully without them):
+ListMenu open/cursor predicate (for `[ListMenu]`), day counter, funds, CO
+power meters, the unit table. The fastest path for those is the human one
+from the previous section: play to the screen of interest, F5 a savestate,
+then `rawprobe` scripted transitions against it.
+
+### Engineering note: honesty over invention
+
+The sidebar and undo features are built on reads that are verified, and
+report `-` / hidden for everything else. When a new address is mined,
+record it here with how it was verified, then wire it into
+`runtime/src/tactical_intel.cpp` behind a validity flag - never a fallback
+that invents a plausible value.

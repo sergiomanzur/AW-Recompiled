@@ -6,13 +6,17 @@
 #include "aw/cpu_state.hpp"
 #include "aw/generated_blocks.hpp"
 #include "aw/hardware.hpp"
+#include "aw/map_sensor.hpp"
 #include "aw/nav/nav_controller.hpp"
 #include "aw/hd_audio.hpp"
+#include "aw/order_stack.hpp"
 #include "aw/ppu.hpp"
 #include "aw/probe/backend_mgba.hpp"
+#include "aw/probe/cursor_probe.hpp"
 #include "aw/probe/oam.hpp"
 #include "aw/render/hud_overlay.hpp"
 #include "aw/render/pointer_overlay.hpp"
+#include "aw/render/sidebar.hpp"
 #include "aw/rewind.hpp"
 #include "aw/rom.hpp"
 #include "aw/tactical_intel.hpp"
@@ -227,6 +231,16 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       rewind_buffer.set_io(make_rewind_io(core));
     }
 
+    // Undo Last Order: snapshots taken at the A press that confirms an
+    // order while the map sensor sees live cursor control. Ten deep.
+    aw::OrderStack order_stack;
+    order_stack.set_io(make_rewind_io(core));
+
+    // Map sensor: "the player is commanding the map" is decided by the
+    // mined cursor coordinates answering the D-pad - the one verified
+    // game-state read this project has.
+    aw::MapSensor map_sensor;
+
     // Fast-forward runs core frames in a time-bounded burst between renders
     // so the CPU spends its budget emulating instead of blitting. The frame
     // minimum keeps GDI render + event-pump overhead below ~5% of the burst.
@@ -259,10 +273,20 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
     int rewind_repeat_counter = 0;
     bool ff_was_active = false;
     int rewind_smoke_restores = 0;
+    std::uint16_t prev_keys = 0;
+    std::uint64_t undo_points_taken = 0;
+    bool undo_capture_logged = false;
 
     using clock = std::chrono::steady_clock;
     const std::chrono::nanoseconds frame_duration_ns(static_cast<std::int64_t>(1000000000.0 / gba_fps));
     auto next_frame_time = clock::now();
+
+    // Telemetry for the sidebar: emulated frames vs wall time, refreshed
+    // every ~500 ms.
+    auto telemetry_start = clock::now();
+    std::uint64_t telemetry_frames_base = 0;
+    double telemetry_fps = 0.0;
+    double telemetry_speed_pct = 100.0;
 
     auto copy_video_frame = [&mgba_buffer, &ppu]() {
       // Copy mGBA video buffer to PPU framebuffer with R/B channel swapping for Win32 GDI
@@ -289,9 +313,13 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         // previous ROM's OAM/context.
         probe.set_core(core);
         nav.reset();
-        // Rewind history belongs to the destroyed core's timeline.
+        // Rewind history and undo points belong to the destroyed core's
+        // timeline.
         rewind_buffer.set_io(make_rewind_io(core));
         rewind_buffer.reset();
+        order_stack.set_io(make_rewind_io(core));
+        order_stack.reset();
+        map_sensor.reset();
       }
 
       hardware.keys_pressed = 0;
@@ -317,6 +345,8 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
           // Audio queued before the load belongs to the abandoned timeline.
           audio.drop_pending();
           rewind_buffer.reset();
+          order_stack.reset();
+          map_sensor.reset();
         } else {
           std::cerr << "Failed to load state from: " << load_request << std::endl;
         }
@@ -360,6 +390,24 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       rewind_was_held = rewind_held;
 
       if (!did_rewind && !rewind_held) {
+        // --- Undo Last Order: restore the snapshot taken at the A press
+        // that confirmed the order (Ctrl+Z, pad L3, or the File menu).
+        if (window.consume_undo_press()) {
+          if (order_stack.pop()) {
+            ++undo_points_taken;
+            audio.drop_pending();
+            rewind_buffer.reset();
+            map_sensor.reset();
+            aw_mgba_run_frame(core, 0);  // Refresh the framebuffer from the restored state.
+            ++frames_run;
+            aw_mgba_read_audio(core, audio_samples.data(), audio_samples.size() / 2);
+            std::cout << "Undo: restored order point (" << order_stack.size()
+                      << " remaining)" << std::endl;
+          } else if (!order_stack.disabled()) {
+            std::cout << "Undo: no order points captured yet" << std::endl;
+          }
+        }
+
         // --- Normal / fast-forward emulation.
         if (ff_active) {
           if (!ff_was_active) {
@@ -379,6 +427,7 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
           } while (burst_frames < kFastForwardBurstMaxFrames &&
                    (burst_frames < kFastForwardBurstMinFrames ||
                     clock::now() - burst_start < kFastForwardBurstBudget));
+          prev_keys = hardware.keys_pressed;
         } else {
           if (ff_was_active) {
             std::cout << "Fast-forward: back to 1x" << std::endl;
@@ -388,9 +437,25 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
           intel.update(probe, nav.context());
           hd_audio.update(probe);
 
+          // Capture an undo point at the moment an order is confirmed: an
+          // A press while the map sensor sees live cursor control. The
+          // snapshot precedes the frame, so undo lands exactly before the
+          // unit moved / the menu opened.
+          const bool a_edge = (hardware.keys_pressed & aw::kKeyA) != 0 &&
+                              (prev_keys & aw::kKeyA) == 0;
+          if (a_edge && map_sensor.in_map()) {
+            if (order_stack.push() && !undo_capture_logged) {
+              undo_capture_logged = true;
+              std::cout << "Undo: order point captured (Ctrl+Z to restore)" << std::endl;
+            }
+          }
+
           aw_mgba_run_frame(core, hardware.keys_pressed);
           frames_run++;
           rewind_buffer.on_frame();
+          map_sensor.on_frame(hardware.keys_pressed,
+                              read_cursor_tile(probe, nav.cursor_addresses()));
+          prev_keys = hardware.keys_pressed;
 
           // Check for audio sample rate changes from core (e.g. SOUNDBIAS 32768 Hz <-> 65536 Hz)
           const unsigned current_rate = aw_mgba_audio_sample_rate(core);
@@ -411,6 +476,20 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
 
       window.set_playback_indicator(rewind_held ? -1 : (ff_active ? 1 : 0));
 
+      // Telemetry: emulated frames per wall-clock second, as a speed
+      // percentage against the GBA's real frame rate.
+      {
+        const auto now = clock::now();
+        const double elapsed_s = std::chrono::duration<double>(now - telemetry_start).count();
+        if (elapsed_s >= 0.5) {
+          const double frames = static_cast<double>(frames_run - telemetry_frames_base);
+          telemetry_fps = frames / elapsed_s;
+          telemetry_speed_pct = telemetry_fps / gba_fps * 100.0;
+          telemetry_start = now;
+          telemetry_frames_base = frames_run;
+        }
+      }
+
       copy_video_frame();
 
       // Draw pixel-perfect C++ Tactical Intel HUD overlay if enabled
@@ -418,8 +497,24 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         aw::draw_hud_overlay(ppu.framebuffer.data(), ppu.width, ppu.height, intel, false);
       }
 
-      // Render frame to window
-      window.render(ppu);
+      // Render frame to window, with the tactical sidebar beside the game.
+      aw::SidebarData sidebar;
+      sidebar.fast_forward = ff_active;
+      sidebar.rewinding = rewind_held;
+      sidebar.in_map = map_sensor.in_map();
+      sidebar.cursor_valid = intel.cursor_valid();
+      sidebar.cursor_x = intel.cursor_x();
+      sidebar.cursor_y = intel.cursor_y();
+      sidebar.undo_depth = order_stack.size();
+      sidebar.undo_capacity = order_stack.capacity();
+      sidebar.rewind_snapshots = rewind_buffer.size();
+      sidebar.rewind_capacity = rewind_buffer.capacity();
+      sidebar.rewind_window_seconds = rewind_window_frames / gba_fps;
+      sidebar.fps = telemetry_fps;
+      sidebar.emu_speed_pct = telemetry_speed_pct;
+      sidebar.frames_run = frames_run;
+      sidebar.forecast = intel.forecast();
+      window.render(ppu, sidebar);
 
       if (oam_log.is_open()) {
         const std::uint8_t* oam_bytes = probe.oam();

@@ -32,6 +32,8 @@ add_library(aw_runtime STATIC
   src/memory.cpp
   src/nav/nav_controller.cpp
   src/nav/pointer_nav.cpp
+  src/order_stack.cpp
+  src/map_sensor.cpp
   src/ppu.cpp
   src/probe/backend_mgba.cpp
   src/probe/context.cpp
@@ -40,6 +42,7 @@ add_library(aw_runtime STATIC
   src/probe/oam_tracker.cpp
   src/render/hud_overlay.cpp
   src/render/pointer_overlay.cpp
+  src/render/sidebar.cpp
   src/rewind.cpp
   src/rom.cpp
   src/tactical_intel.cpp
@@ -308,6 +311,45 @@ target_link_libraries(rewind_tests PRIVATE aw_runtime)
 
 add_test(NAME rewind_tests COMMAND rewind_tests)
 
+add_executable(order_stack_tests
+  tests/order_stack_tests.cpp
+)
+
+target_include_directories(order_stack_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_BINARY_DIR}/generated
+)
+
+target_link_libraries(order_stack_tests PRIVATE aw_runtime)
+
+add_test(NAME order_stack_tests COMMAND order_stack_tests)
+
+add_executable(map_sensor_tests
+  tests/map_sensor_tests.cpp
+)
+
+target_include_directories(map_sensor_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_BINARY_DIR}/generated
+)
+
+target_link_libraries(map_sensor_tests PRIVATE aw_runtime)
+
+add_test(NAME map_sensor_tests COMMAND map_sensor_tests)
+
+add_executable(sidebar_tests
+  tests/sidebar_tests.cpp
+)
+
+target_include_directories(sidebar_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_BINARY_DIR}/generated
+)
+
+target_link_libraries(sidebar_tests PRIVATE aw_runtime)
+
+add_test(NAME sidebar_tests COMMAND sidebar_tests)
+
 add_executable(advance-wars-native
   src/main.cpp
 )
@@ -364,3 +406,13 @@ target_include_directories(aw-cursor-miner PRIVATE
 )
 
 target_link_libraries(aw-cursor-miner PRIVATE aw_runtime)
+
+add_executable(aw-boot-probe
+  tools/boot_probe.cpp
+)
+
+target_include_directories(aw-boot-probe PRIVATE
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
+)
+
+target_link_libraries(aw-boot-probe PRIVATE aw_runtime)

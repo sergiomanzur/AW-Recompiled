@@ -44,9 +44,14 @@ void tests_frame_clear_resets_everything() {
 void tests_hotkeys_are_distinct_bits() {
   require_equal(aw::kHotkeyRewind & aw::kHotkeyFastForward, std::uint16_t{0},
                 "rewind and fast-forward do not overlap");
+  require_equal(aw::kHotkeyRewind & aw::kHotkeyUndo, std::uint16_t{0},
+                "rewind and undo do not overlap");
+  require_equal(aw::kHotkeyFastForward & aw::kHotkeyUndo, std::uint16_t{0},
+                "fast-forward and undo do not overlap");
   require_equal(aw::kHotkeyMask,
-                static_cast<std::uint16_t>(aw::kHotkeyRewind | aw::kHotkeyFastForward),
-                "hotkey mask covers both bits");
+                static_cast<std::uint16_t>(aw::kHotkeyRewind | aw::kHotkeyFastForward |
+                                           aw::kHotkeyUndo),
+                "hotkey mask covers all three bits");
   require_equal(aw::InputFrame{}.hotkeys, std::uint16_t{0}, "hotkeys start clear");
 }
 

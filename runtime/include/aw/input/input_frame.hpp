@@ -12,11 +12,13 @@ namespace aw {
 // these arrives from a physical device.
 constexpr std::uint16_t kDpadMask = kKeyUp | kKeyDown | kKeyLeft | kKeyRight;
 
-// Engine-level hotkeys (time travel / fast forward). These never reach the
-// GBA; the platform layer ORs them into InputFrame alongside the buttons.
+// Engine-level hotkeys (time travel / fast forward / undo). These never
+// reach the GBA; the platform layer ORs them into InputFrame alongside the
+// buttons.
 constexpr std::uint16_t kHotkeyRewind = 1u << 0;        // Hold: rewind time
 constexpr std::uint16_t kHotkeyFastForward = 1u << 1;   // Hold: fast forward
-constexpr std::uint16_t kHotkeyMask = kHotkeyRewind | kHotkeyFastForward;
+constexpr std::uint16_t kHotkeyUndo = 1u << 2;          // Press: undo last order
+constexpr std::uint16_t kHotkeyMask = kHotkeyRewind | kHotkeyFastForward | kHotkeyUndo;
 
 enum class PointerKind : std::uint8_t {
   None,   // Slot unused

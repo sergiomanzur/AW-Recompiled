@@ -1,57 +1,48 @@
 #include "aw/tactical_intel.hpp"
 
 #include <algorithm>
-#include <cmath>
-#include <cstring>
 
 namespace aw {
 
 namespace {
 
-const char* kCoNames[] = {
-  "Andy", "Max", "Sami", "Nell", "Hachi",
-  "Olaf", "Grit", "Colin", "Kanbei", "Sonja",
-  "Sensei", "Eagle", "Drake", "Jess", "Javier",
-  "Sturm", "Hawke", "Adder", "Lash", "Koal"
-};
-
-const char* kArmies[] = {
-  "RED STAR", "BLUE MOON", "GREEN EARTH", "YELLOW COMET"
-};
+// The mined map-cursor tile coordinates (IWRAM 0x030036A4/0x030036A6), the
+// one game-state read this project has verified end to end (mined by
+// aw-cursor-miner, recorded in data/symbols/<sha1>.ini, trusted daily by
+// pointer steering). Everything else this class once "read" was fabricated;
+// those fields stay invalid until their addresses are mined and verified.
+constexpr std::uint32_t kCursorXAddr = 0x030036A4;
+constexpr std::uint32_t kCursorYAddr = 0x030036A6;
 
 struct UnitTypeSpec {
   const char* name;
-  int move_range;
-  const char* move_type;
-  int max_ammo;
-  int max_fuel;
 };
 
 const UnitTypeSpec kUnitTypes[] = {
-  {"INFANTRY",      3, "FOOT",    0, 99},
-  {"MECH",          2, "MECH",    3, 70},
-  {"RECON",         8, "WHEEL",   0, 80},
-  {"TANK",          6, "TREAD",   9, 70},
-  {"MD TANK",       5, "TREAD",   8, 50},
-  {"NEOTANK",       6, "TREAD",   9, 99},
-  {"MEGATANK",      4, "TREAD",   3, 50},
-  {"ANTI-AIR",      6, "TREAD",   9, 60},
-  {"MISSILES",      4, "WHEEL",   6, 50},
-  {"ARTILLERY",     5, "TREAD",   9, 50},
-  {"ROCKETS",       5, "WHEEL",   6, 50},
-  {"APC",           6, "TREAD",   0, 70},
-  {"FIGHTER",       9, "AIR",     9, 99},
-  {"BOMBER",        7, "AIR",     9, 99},
-  {"B-COPTER",      6, "AIR",     6, 99},
-  {"T-COPTER",      6, "AIR",     0, 99},
-  {"BATTLESHIP",    5, "SEA",     9, 99},
-  {"CRUISER",       6, "SEA",     9, 99},
-  {"LANDER",        6, "SEA",     0, 99},
-  {"SUBMARINE",     5, "SEA",     6, 60}
+  {"INFANTRY"},
+  {"MECH"},
+  {"RECON"},
+  {"TANK"},
+  {"MD TANK"},
+  {"NEOTANK"},
+  {"MEGATANK"},
+  {"ANTI-AIR"},
+  {"MISSILES"},
+  {"ARTILLERY"},
+  {"ROCKETS"},
+  {"APC"},
+  {"FIGHTER"},
+  {"BOMBER"},
+  {"B-COPTER"},
+  {"T-COPTER"},
+  {"BATTLESHIP"},
+  {"CRUISER"},
+  {"LANDER"},
+  {"SUBMARINE"}
 };
 
 // Advance Wars 1 Base Damage Matrix Table [Attacker][Defender] in %
-int get_base_damage(int att_type, int def_type) {
+const int* base_damage_matrix() {
   static const int matrix[20][20] = {
     // INF, MCH, RCN, TNK, MDT, NEO, MEG,  AA, MIS, ART, RCK, APC, FIG, BMB, BCP, TCP, BSH, CRS, LND, SUB
     {  55,  45,  12,   5,   1,   1,   1,   5,  25,  15,  25,  14,   0,   0,   7,  30,   0,   0,   0,   0}, // Infantry
@@ -66,7 +57,7 @@ int get_base_damage(int att_type, int def_type) {
     {  90,  85,  80,  70,  45,  40,  15,  75,  85,  75,  85,  80,   0,   0,  65, 100,  40,  65,  55,  40}, // Artillery
     {  95,  90,  90,  80,  55,  50,  25,  85,  90,  80,  90,  85,   0,   0,  75, 105,  55,  75,  65,  55}, // Rockets
     {   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0}, // APC
-    {   0,   0,   0,   0,   0,   0,   0, 0,   0,   0,   0,   0,  55, 100, 100, 100,   0,   0,   0,   0}, // Fighter
+    {   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  55, 100, 100, 100,   0,   0,   0,   0}, // Fighter
     { 110, 110, 105,  95,  60,  55,  35,  95, 105, 105, 105, 105,   0,   0,   0,   0,  75,  85,  95,  85}, // Bomber
     {  75,  75,  55,  55,  25,  20,  10,  25,  65,  65,  65,  60,   0,   0,  65,  95,  25,  55,  55,  25}, // B-Copter
     {   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0}, // T-Copter
@@ -75,130 +66,75 @@ int get_base_damage(int att_type, int def_type) {
     {   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0}, // Lander
     {   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  55,  25,  95,  55}  // Submarine
   };
+  return &matrix[0][0];
+}
 
+int get_base_damage(int att_type, int def_type) {
   att_type = std::clamp(att_type, 0, 19);
   def_type = std::clamp(def_type, 0, 19);
-  return matrix[att_type][def_type];
+  return base_damage_matrix()[att_type * 20 + def_type];
 }
 
 }  // namespace
 
-void TacticalIntel::update(ProbeBackend& backend, ContextId context) {
-  in_gameplay_ = backend.available();
-  if (!in_gameplay_) return;
+const char* unit_type_name(int unit_type) {
+  if (unit_type < 0 || unit_type >= 20) return "UNIT";
+  return kUnitTypes[unit_type].name;
+}
 
-  // Read IWRAM for Cursor Tile Coordinates
-  std::size_t iwram_size = 0;
-  const std::uint8_t* iwram = backend.iwram(iwram_size);
-  if (iwram != nullptr && iwram_size >= 0x36A8) {
-    cursor_x_ = iwram[0x36A4] % 30;
-    cursor_y_ = iwram[0x36A6] % 30;
-  } else {
-    cursor_x_ = 5;
-    cursor_y_ = 5;
-  }
+DamageForecast compute_forecast(int attacker_type, int defender_type,
+                                int defender_hp, int defender_terrain_stars) {
+  DamageForecast forecast;
+  const int att_type = std::clamp(attacker_type, 0, 19);
+  const int def_type = std::clamp(defender_type, 0, 19);
+  const int hp = std::clamp(defender_hp, 1, 10);
+  const int stars = std::clamp(defender_terrain_stars, 0, 4);
 
-  // Read EWRAM for CO State, Funds, and Units Array
-  std::size_t ewram_size = 0;
-  const std::uint8_t* ewram = backend.ewram(ewram_size);
+  forecast.valid = true;
+  forecast.attacker_name = unit_type_name(att_type);
+  forecast.defender_name = unit_type_name(def_type);
+  forecast.defender_hp = hp;
+  forecast.defender_terrain_stars = stars;
 
-  int raw_co_id = 0;
-  if (ewram != nullptr && ewram_size >= 0x5000) {
-    // Player funds & active CO
-    raw_co_id = ewram[0x5044] % 20;
-    active_co_.co_id = raw_co_id;
-    active_co_.name = kCoNames[raw_co_id];
-    active_co_.power_pct = std::min(100, static_cast<int>(ewram[0x5048]) % 100);
-
-    turn_count_ = std::max(1, static_cast<int>(ewram[0x1930]));
-    player_funds_ = (static_cast<int>(ewram[0x5048]) * 100) + 12000;
-  } else {
-    active_co_.co_id = 0;
-    active_co_.name = "Andy";
-    active_co_.power_pct = 40;
-    turn_count_ = 3;
-    player_funds_ = 12500;
-  }
-
-  // Scan Units Array for Unit at Cursor Position
-  hovered_unit_.valid = false;
-  bool unit_found = false;
-
-  if (ewram != nullptr && ewram_size >= 0x6800) {
-    // Scan up to 40 active unit slots in EWRAM (each struct 12 bytes)
-    for (std::size_t offset = 0x5E78; offset <= 0x6400; offset += 12) {
-      const std::uint8_t owner = ewram[offset + 1];
-      const std::uint8_t type = ewram[offset + 2];
-      const std::uint8_t ux = ewram[offset + 3];
-      const std::uint8_t uy = ewram[offset + 4];
-      const std::uint8_t hp_raw = ewram[offset + 5];
-
-      if (owner < 4 && type < 20 && ux == cursor_x_ && uy == cursor_y_ && hp_raw > 0) {
-        const UnitTypeSpec& spec = kUnitTypes[type];
-        hovered_unit_.valid = true;
-        hovered_unit_.name = spec.name;
-        hovered_unit_.army = kArmies[owner];
-        hovered_unit_.owner = owner;
-        hovered_unit_.unit_type = type;
-        hovered_unit_.hp = std::clamp(static_cast<int>(hp_raw) / 10, 1, 10);
-        hovered_unit_.ammo = spec.max_ammo;
-        hovered_unit_.max_ammo = spec.max_ammo;
-        hovered_unit_.fuel = spec.max_fuel;
-        hovered_unit_.max_fuel = spec.max_fuel;
-        hovered_unit_.x = ux;
-        hovered_unit_.y = uy;
-        hovered_unit_.move_range = spec.move_range;
-        hovered_unit_.move_type = spec.move_type;
-        hovered_unit_.terrain_stars = 1;
-        hovered_unit_.terrain_name = "PLAIN (+1 DEF)";
-        unit_found = true;
-        break;
-      }
-    }
-  }
-
-  // Fallback map inspection if no unit exact match at cursor
-  if (!unit_found) {
-    // Provide active hovered unit data based on cursor location
-    hovered_unit_.valid = true;
-    hovered_unit_.name = (cursor_x_ % 2 == 0) ? "INFANTRY" : "TANK";
-    hovered_unit_.army = (cursor_x_ % 2 == 0) ? "RED STAR" : "BLUE MOON";
-    hovered_unit_.owner = (cursor_x_ % 2 == 0) ? 0 : 1;
-    hovered_unit_.unit_type = (cursor_x_ % 2 == 0) ? 0 : 3;
-    hovered_unit_.hp = 10;
-    hovered_unit_.ammo = kUnitTypes[hovered_unit_.unit_type].max_ammo;
-    hovered_unit_.max_ammo = kUnitTypes[hovered_unit_.unit_type].max_ammo;
-    hovered_unit_.fuel = kUnitTypes[hovered_unit_.unit_type].max_fuel;
-    hovered_unit_.max_fuel = kUnitTypes[hovered_unit_.unit_type].max_fuel;
-    hovered_unit_.x = cursor_x_;
-    hovered_unit_.y = cursor_y_;
-    hovered_unit_.move_range = kUnitTypes[hovered_unit_.unit_type].move_range;
-    hovered_unit_.move_type = kUnitTypes[hovered_unit_.unit_type].move_type;
-    hovered_unit_.terrain_stars = (cursor_y_ % 3 == 0) ? 3 : 1;
-    hovered_unit_.terrain_name = (cursor_y_ % 3 == 0) ? "CITY (+3 DEF)" : "PLAIN (+1 DEF)";
-  }
-
-  // Populate Live Combat Damage Forecast
-  forecast_.valid = true;
-  forecast_.attacker_name = (hovered_unit_.owner == 0) ? "TANK (RED)" : "INFANTRY (RED)";
-  forecast_.defender_name = (hovered_unit_.owner == 0) ? "INFANTRY (BLUE)" : "TANK (BLUE)";
-  forecast_.attacker_hp = 10;
-  forecast_.defender_hp = 10;
-
-  const int att_type = (hovered_unit_.owner == 0) ? 3 : 0; // Tank or Infantry
-  const int def_type = (hovered_unit_.owner == 0) ? 0 : 3;
   const int base_dmg = get_base_damage(att_type, def_type);
-  const int def_stars = hovered_unit_.terrain_stars;
-  const int def_reduction = (100 - def_stars * 10);
+  if (base_dmg <= 0) {
+    forecast.min_damage = 0;
+    forecast.max_damage = 0;
+    forecast.counter_damage = 0;
+    return forecast;
+  }
 
+  // AW1 maths: damage scales with the attacker's HP display value (10 for a
+  // fresh unit, fed in via defender-style clamping by the caller when real
+  // attacker HP becomes readable) and the defender's terrain stars.
+  const int def_reduction = 100 - stars * 10;
   const int calc_dmg = (base_dmg * 10 * def_reduction) / 1000;
-  forecast_.min_damage = std::max(0, calc_dmg - 4);
-  forecast_.max_damage = std::min(100, calc_dmg + 6);
+  forecast.min_damage = std::max(0, calc_dmg - 4);
+  forecast.max_damage = std::min(100, calc_dmg + 6);
 
   const int counter_base = get_base_damage(def_type, att_type);
   const int remaining_def_hp = std::max(0, 10 - (calc_dmg / 10));
-  forecast_.counter_damage = (counter_base * remaining_def_hp * 9) / 100;
-  forecast_.defender_terrain_stars = def_stars;
+  forecast.counter_damage = (counter_base * remaining_def_hp * 9) / 100;
+  return forecast;
+}
+
+void TacticalIntel::update(ProbeBackend& backend, ContextId /*context*/) {
+  backend_ok_ = backend.available();
+
+  // The one verified read: the mined cursor coordinates.
+  const CursorTile tile = read_cursor_tile(
+      backend, {kCursorXAddr, kCursorYAddr});
+  cursor_valid_ = tile.found;
+  cursor_x_ = tile.x;
+  cursor_y_ = tile.y;
+
+  // CO, funds, turn count and the unit table have no verified addresses
+  // yet (see aw-boot-probe and data/symbols/README.md for the mining
+  // workflow). Report invalid rather than fabricate.
+  active_co_ = CoIntel{};
+  selected_unit_ = UnitIntel{};
+  hovered_unit_ = UnitIntel{};
+  forecast_ = DamageForecast{};
 }
 
 }  // namespace aw

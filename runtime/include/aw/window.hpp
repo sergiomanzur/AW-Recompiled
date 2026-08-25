@@ -6,19 +6,12 @@
 #include "aw/input/source_win32.hpp"
 #include "aw/input_config.hpp"
 #include "aw/ppu.hpp"
+#include "aw/render/sidebar.hpp"
+#include "aw/viewport.hpp"
 #include <string>
 #include <vector>
 
 namespace aw {
-
-enum class AspectRatio {
-  Original_3_2,  // 3:2 Window Mode (960x640)
-  Ratio_4_3,     // 4:3 Window Mode (960x720)
-  Ratio_16_9,    // 16:9 Window Mode (1152x648)
-  Ratio_21_9,    // 21:9 Window Mode (1260x540)
-  Ratio_21_10,   // 21:10 Window Mode (1134x540)
-  Stretch        // Fill Window without aspect lock
-};
 
 enum class InternalResolution {
   Native,    // GBA Native (240x160)
@@ -33,23 +26,13 @@ enum class VideoFilter {
   Scale2x          // HD 2x pixel art smoothing filter
 };
 
-struct ViewportRect {
-  int x = 0;
-  int y = 0;
-  int width = 0;
-  int height = 0;
-};
-
-// Pure calculation function for letterbox/pillarbox viewport geometry
-ViewportRect calculate_viewport_rect(int client_width, int client_height, AspectRatio ratio);
-
 class Window {
 public:
   Window(int width = 960, int height = 640, const char* title = "Advance Wars (Native Recomp)");
   ~Window();
 
   bool process_events(Hardware& hardware);
-  void render(const Ppu& ppu);
+  void render(const Ppu& ppu, const SidebarData& sidebar);
   bool is_open() const { return is_open_; }
 
   void set_aspect_ratio(AspectRatio ratio);
@@ -69,6 +52,12 @@ public:
   bool show_hud() const { return show_hud_; }
   void set_show_hud(bool show);
   void toggle_hud() { set_show_hud(!show_hud_); }
+
+  // Tactical sidebar: the native panel shown beside the game in widescreen
+  // aspects. Splits the client area into a 3:2 game rect plus the panel.
+  bool sidebar_enabled() const { return sidebar_enabled_; }
+  void set_sidebar_enabled(bool enabled);
+  void toggle_sidebar() { set_sidebar_enabled(!sidebar_enabled_); }
 
   void resize_client(int width, int height);
 
@@ -100,6 +89,11 @@ public:
   void request_rewind_step() { rewind_step_requested_ = true; }
   void toggle_fast_forward_latch();
 
+  // Undo last order: Ctrl+Z keyboard, left-stick click on XInput, or the
+  // File menu. Edge-triggered; one press = one undo.
+  bool consume_undo_press();
+  void request_undo() { undo_requested_ = true; }
+
   // -1 = rewinding, 0 = normal, +1 = fast forwarding. Shown in the title bar
   // so the mode is visible without on-screen clutter.
   void set_playback_indicator(int indicator);
@@ -116,6 +110,7 @@ public:
 
 private:
   void update_menu_checks();
+  void draw_sidebar_panel(void* hdc, const SidebarData& data, const SidebarLayout& layout);
 
   void* hwnd_ = nullptr;
   void* hdc_ = nullptr;
@@ -127,7 +122,9 @@ private:
   InternalResolution internal_resolution_ = InternalResolution::Native;
   VideoFilter video_filter_ = VideoFilter::NearestNeighbor;
   bool show_hud_ = true;
+  bool sidebar_enabled_ = true;
   bool f2_key_was_down_ = false;
+  bool f4_key_was_down_ = false;
   std::string pending_rom_path_;
   std::string pending_save_state_path_;
   std::string pending_load_state_path_;
@@ -138,6 +135,8 @@ private:
   bool fast_forward_held_ = false;
   bool fast_forward_latch_ = false;
   bool rewind_step_requested_ = false;
+  bool undo_requested_ = false;
+  bool undo_hotkey_was_down_ = false;
   int playback_indicator_ = 0;
   std::string window_title_;
 
@@ -153,6 +152,7 @@ private:
   int last_client_w_ = 0;
   int last_client_h_ = 0;
   AspectRatio last_aspect_ratio_ = AspectRatio::Original_3_2;
+  bool last_sidebar_enabled_ = true;
   ViewportRect cached_viewport_{};
 };
 

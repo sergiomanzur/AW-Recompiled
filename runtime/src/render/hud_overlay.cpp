@@ -115,23 +115,28 @@ void draw_hud_overlay(std::uint32_t* fb, int fb_w, int fb_h,
                       const TacticalIntel& intel, bool /*widescreen_mode*/) {
   if (fb == nullptr || fb_w <= 0 || fb_h <= 0) return;
 
-  // Top Bar: CO Status, Funds, Turn
-  const int top_x = 4;
-  const int top_y = 2;
-  const int top_w = 232;
-  const int top_h = 13;
+  // Top Bar: only the verified cursor readout. CO/funds/turn stay hidden
+  // until their addresses are mined (see data/symbols/README.md) - the HUD
+  // never invents values.
+  if (intel.cursor_valid()) {
+    const int top_x = 4;
+    const int top_y = 2;
+    const int top_w = 96;
+    const int top_h = 13;
 
-  // Dark translucent background with sleek blue accent line
-  draw_rect(fb, fb_w, fb_h, top_x, top_y, top_w, top_h, 0xDD0B121Cu);
-  draw_rect(fb, fb_w, fb_h, top_x, top_y, top_w, 1, 0xFF4A90E2u);
-  draw_rect(fb, fb_w, fb_h, top_x, top_y + top_h - 1, top_w, 1, 0xFF4A90E2u);
+    draw_rect(fb, fb_w, fb_h, top_x, top_y, top_w, top_h, 0xDD0B121Cu);
+    draw_rect(fb, fb_w, fb_h, top_x, top_y, top_w, 1, 0xFF4A90E2u);
+    draw_rect(fb, fb_w, fb_h, top_x, top_y + top_h - 1, top_w, 1, 0xFF4A90E2u);
 
-  const CoIntel& co = intel.active_co();
-  std::string top_text = "CO: " + co.name + " (" + (co.co_id == 0 ? "RED" : "BLUE") + ") | FUNDS: $" +
-                         std::to_string(intel.player_funds()) + " | TURN " + std::to_string(intel.turn_count());
-  draw_text(fb, fb_w, fb_h, top_x + 4, top_y + 3, top_text, 0xFF50E3C2u);
+    std::string top_text = "CUR " + std::to_string(intel.cursor_x()) + "," +
+                           std::to_string(intel.cursor_y());
+    draw_text(fb, fb_w, fb_h, top_x + 4, top_y + 3, top_text, 0xFF50E3C2u);
+  }
 
-  // Bottom Panel: Hovered Unit Stats & Combat Damage Forecast
+  // Bottom Panel: unit stats & combat forecast, only when the data is real.
+  const UnitIntel& unit = intel.hovered_unit();
+  if (!unit.valid) return;
+
   const int bot_x = 4;
   const int bot_y = 122;
   const int bot_w = 232;
@@ -142,26 +147,25 @@ void draw_hud_overlay(std::uint32_t* fb, int fb_w, int fb_h,
   draw_rect(fb, fb_w, fb_h, bot_x, bot_y, bot_w, 1, 0xFFF5A623u);
   draw_rect(fb, fb_w, fb_h, bot_x, bot_y + bot_h - 1, bot_w, 1, 0xFFF5A623u);
 
-  const UnitIntel& unit = intel.hovered_unit();
-  if (unit.valid) {
-    // Line 1: Unit Name, HP, Ammo, Fuel
-    std::string line1 = unit.name + " [" + unit.army + "] HP:" + std::to_string(unit.hp) + "/10";
-    if (unit.max_ammo > 0) {
-      line1 += " AMMO:" + std::to_string(unit.ammo);
-    }
-    line1 += " FUEL:" + std::to_string(unit.fuel);
-    draw_text(fb, fb_w, fb_h, bot_x + 4, bot_y + 4, line1, 0xFFFFFFFFu);
+  // Line 1: Unit Name, HP, Ammo, Fuel
+  std::string line1 = unit.name + " [" + unit.army + "] HP:" + std::to_string(unit.hp) + "/10";
+  if (unit.max_ammo > 0) {
+    line1 += " AMMO:" + std::to_string(unit.ammo);
+  }
+  line1 += " FUEL:" + std::to_string(unit.fuel);
+  draw_text(fb, fb_w, fb_h, bot_x + 4, bot_y + 4, line1, 0xFFFFFFFFu);
 
-    // Line 2: Damage Calculator & Combat Forecast
-    const DamageForecast& fc = intel.forecast();
+  // Line 2: Damage Calculator & Combat Forecast
+  const DamageForecast& fc = intel.forecast();
+  if (fc.valid) {
     std::string line2 = "DMG VS " + fc.defender_name + ": " + std::to_string(fc.min_damage) + "%-" +
                         std::to_string(fc.max_damage) + "% | CNTR: " + std::to_string(fc.counter_damage) + "%";
     draw_text(fb, fb_w, fb_h, bot_x + 4, bot_y + 15, line2, 0xFFF5A623u);
-
-    // Line 3: Terrain Defense & Movement
-    std::string line3 = "TERRAIN: " + unit.terrain_name + " | MOVE: " + std::to_string(unit.move_range) + " (" + unit.move_type + ")";
-    draw_text(fb, fb_w, fb_h, bot_x + 4, bot_y + 26, line3, 0xFF7ED321u);
   }
+
+  // Line 3: Terrain Defense & Movement
+  std::string line3 = "TERRAIN: " + unit.terrain_name + " | MOVE: " + std::to_string(unit.move_range) + " (" + unit.move_type + ")";
+  draw_text(fb, fb_w, fb_h, bot_x + 4, bot_y + 26, line3, 0xFF7ED321u);
 }
 
 }  // namespace aw

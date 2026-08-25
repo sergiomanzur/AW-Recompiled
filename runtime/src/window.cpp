@@ -72,6 +72,7 @@ constexpr UINT IDM_FILE_SAVE_AS         = 1005;
 constexpr UINT IDM_FILE_LOAD_FROM       = 1006;
 constexpr UINT IDM_FILE_REWIND          = 1007;
 constexpr UINT IDM_FILE_FASTFORWARD     = 1008;
+constexpr UINT IDM_FILE_UNDO            = 1009;
 constexpr UINT IDM_SAVE_SLOT_1          = 1011;
 constexpr UINT IDM_SAVE_SLOT_2          = 1012;
 constexpr UINT IDM_SAVE_SLOT_3          = 1013;
@@ -98,6 +99,7 @@ constexpr UINT IDM_FILTER_SCALE2X        = 2203;
 constexpr UINT IDM_SETTINGS_SELECT_ROM  = 3001;
 constexpr UINT IDM_SETTINGS_CONTROLS    = 3002;
 constexpr UINT IDM_SETTINGS_TOGGLE_HUD  = 3003;
+constexpr UINT IDM_SETTINGS_SIDEBAR     = 3004;
 constexpr UINT IDM_HELP_CONTROLS        = 4001;
 constexpr UINT IDM_HELP_ABOUT           = 4002;
 
@@ -305,6 +307,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
         }
       } else if (id == IDM_FILE_REWIND) {
         if (win != nullptr) win->request_rewind_step();
+      } else if (id == IDM_FILE_UNDO) {
+        if (win != nullptr) win->request_undo();
       } else if (id == IDM_FILE_FASTFORWARD) {
         if (win != nullptr) win->toggle_fast_forward_latch();
       } else if (id >= IDM_SAVE_SLOT_1 && id <= IDM_SAVE_SLOT_5) {
@@ -360,6 +364,15 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
           ConfigFile config;
           config.load("config.ini");
           win->save_config(config);
+        }
+      } else if (id == IDM_SETTINGS_SIDEBAR) {
+        if (win != nullptr) {
+          win->toggle_sidebar();
+          ConfigFile config;
+          config.load("config.ini");
+          win->save_config(config);
+          std::cout << "Tactical Sidebar: " << (win->sidebar_enabled() ? "ENABLED" : "DISABLED")
+                    << std::endl;
         }
       } else if (id == IDM_HELP_ABOUT) {
         MessageBoxA(hwnd,
@@ -443,6 +456,7 @@ Window::Window(int width, int height, const char* title)
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_SAVE_AS, "Save State &As...");
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_LOAD_FROM, "Load State &From...");
   AppendMenuA(hFileMenu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_UNDO, "&Undo Last Order\tCtrl+Z");
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_REWIND, "&Rewind / Time Travel\tBackspace");
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_FASTFORWARD, "&Fast-Forward (toggle)\tTab");
   AppendMenuA(hFileMenu, MF_SEPARATOR, 0, nullptr);
@@ -476,6 +490,7 @@ Window::Window(int width, int height, const char* title)
   AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_CONTROLS, "&Configure Controls & Gamepad...");
   AppendMenuA(hSettingsMenu, MF_SEPARATOR, 0, nullptr);
   AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_TOGGLE_HUD, "Show &Tactical Intel HUD Overlay\tF2");
+  AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_SIDEBAR, "Show Tactical &Sidebar (widescreen)\tF4");
 
   // Help Menu
   AppendMenuA(hHelpMenu, MF_STRING, IDM_HELP_CONTROLS, "&Controls Info...");
@@ -575,6 +590,14 @@ void Window::set_video_filter(VideoFilter filter) {
 
 void Window::set_show_hud(bool show) {
   show_hud_ = show;
+  update_menu_checks();
+  if (hwnd_ != nullptr) {
+    InvalidateRect(static_cast<HWND>(hwnd_), nullptr, TRUE);
+  }
+}
+
+void Window::set_sidebar_enabled(bool enabled) {
+  sidebar_enabled_ = enabled;
   update_menu_checks();
   if (hwnd_ != nullptr) {
     InvalidateRect(static_cast<HWND>(hwnd_), nullptr, TRUE);
@@ -722,11 +745,13 @@ void Window::load_config(const ConfigFile& config) {
   const int res = config.get_int("Display", "internal_resolution", 0);
   const int filter = config.get_int("Display", "video_filter", 1);
   const int hud = config.get_int("Display", "show_hud", 1);
+  const int sidebar = config.get_int("Display", "sidebar", 1);
 
   set_aspect_ratio(static_cast<AspectRatio>(std::clamp(aspect, 0, 5)));
   set_internal_resolution(static_cast<InternalResolution>(std::clamp(res, 0, 3)));
   set_video_filter(static_cast<VideoFilter>(std::clamp(filter, 0, 2)));
   set_show_hud(hud != 0);
+  set_sidebar_enabled(sidebar != 0);
 
   input_mapping_.load_from_config(config);
 }
@@ -736,6 +761,7 @@ void Window::save_config(ConfigFile& config) const {
   config.set_int("Display", "internal_resolution", static_cast<int>(internal_resolution_));
   config.set_int("Display", "video_filter", static_cast<int>(video_filter_));
   config.set_int("Display", "show_hud", show_hud_ ? 1 : 0);
+  config.set_int("Display", "sidebar", sidebar_enabled_ ? 1 : 0);
   if (!pending_rom_path_.empty()) {
     config.set_string("Paths", "rom_path", pending_rom_path_);
   }
@@ -778,6 +804,7 @@ void Window::update_menu_checks() {
   CheckMenuItem(hMenuBar, IDM_FILTER_SCALE2X,   video_filter_ == VideoFilter::Scale2x         ? MF_CHECKED : MF_UNCHECKED);
 
   CheckMenuItem(hMenuBar, IDM_SETTINGS_TOGGLE_HUD, show_hud_ ? MF_CHECKED : MF_UNCHECKED);
+  CheckMenuItem(hMenuBar, IDM_SETTINGS_SIDEBAR, sidebar_enabled_ ? MF_CHECKED : MF_UNCHECKED);
   CheckMenuItem(hMenuBar, IDM_FILE_FASTFORWARD, fast_forward_latch_ ? MF_CHECKED : MF_UNCHECKED);
 }
 
@@ -873,6 +900,14 @@ bool Window::process_events(Hardware& hardware) {
   rewind_held_ = (input_frame_.hotkeys & kHotkeyRewind) != 0;
   fast_forward_held_ = (input_frame_.hotkeys & kHotkeyFastForward) != 0;
 
+  // Undo is edge-triggered: one press (Ctrl+Z or left-stick click) queues
+  // exactly one restore.
+  const bool undo_down = (input_frame_.hotkeys & kHotkeyUndo) != 0;
+  if (undo_down && !undo_hotkey_was_down_) {
+    undo_requested_ = true;
+  }
+  undo_hotkey_was_down_ = undo_down;
+
   // F5 hotkey: Quick Save State
   const bool f5_is_down = (GetAsyncKeyState(VK_F5) & 0x8000) != 0;
   if (f5_is_down && !f5_key_was_down_) {
@@ -914,7 +949,24 @@ bool Window::process_events(Hardware& hardware) {
   }
   f2_key_was_down_ = f2_is_down;
 
+  // F4 hotkey: toggle the tactical sidebar
+  const bool f4_is_down = (GetAsyncKeyState(VK_F4) & 0x8000) != 0;
+  if (f4_is_down && !f4_key_was_down_) {
+    toggle_sidebar();
+    ConfigFile config;
+    config.load("config.ini");
+    save_config(config);
+    std::cout << "Tactical Sidebar: " << (sidebar_enabled_ ? "ENABLED" : "DISABLED") << std::endl;
+  }
+  f4_key_was_down_ = f4_is_down;
+
   return is_open_;
+}
+
+bool Window::consume_undo_press() {
+  if (!undo_requested_) return false;
+  undo_requested_ = false;
+  return true;
 }
 
 bool Window::consume_rewind_step() {
@@ -943,7 +995,56 @@ void Window::set_playback_indicator(int indicator) {
   SetWindowTextA(static_cast<HWND>(hwnd_), title.c_str());
 }
 
-void Window::render(const Ppu& ppu) {
+void Window::draw_sidebar_panel(void* hdc_ptr, const SidebarData& data, const SidebarLayout& layout) {
+  auto* hdc = static_cast<HDC>(hdc_ptr);
+
+  // Panel background with an accent edge on the game side.
+  RECT panel{layout.sidebar.x, layout.sidebar.y,
+             layout.sidebar.x + layout.sidebar.width,
+             layout.sidebar.y + layout.sidebar.height};
+  HBRUSH bg = CreateSolidBrush(RGB(13, 17, 23));
+  FillRect(hdc, &panel, bg);
+  DeleteObject(bg);
+  RECT edge{layout.sidebar.x, layout.sidebar.y, layout.sidebar.x + 2,
+            layout.sidebar.y + layout.sidebar.height};
+  HBRUSH accent = CreateSolidBrush(RGB(74, 144, 226));
+  FillRect(hdc, &edge, accent);
+  DeleteObject(accent);
+
+  static HFONT body_font = nullptr;
+  static HFONT head_font = nullptr;
+  if (body_font == nullptr) {
+    body_font = CreateFontA(-15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                            FIXED_PITCH | FF_MODERN, "Consolas");
+    head_font = CreateFontA(-15, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
+                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                            FIXED_PITCH | FF_MODERN, "Consolas");
+  }
+
+  const auto lines = sidebar_panel_lines(data);
+  int y = layout.sidebar.y + 14;
+  const int x = layout.sidebar.x + 14;
+  const int line_h = 20;
+  for (const auto& [text, is_heading] : lines) {
+    if (is_heading) {
+      y += 8;  // Section break before headings.
+      HBRUSH rule = CreateSolidBrush(RGB(45, 55, 70));
+      RECT rule_rect{x, y + line_h - 4, x + layout.sidebar.width - 28, y + line_h - 3};
+      FillRect(hdc, &rule_rect, rule);
+      DeleteObject(rule);
+    }
+    RECT text_rect{x, y, x + layout.sidebar.width - 14, y + line_h + 4};
+    SetTextColor(hdc, is_heading ? RGB(245, 166, 35) : RGB(220, 228, 238));
+    SetBkMode(hdc, TRANSPARENT);
+    SelectObject(hdc, is_heading ? head_font : body_font);
+    DrawTextA(hdc, text.c_str(), -1, &text_rect,
+              DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOCLIP | DT_PATH_ELLIPSIS);
+    y += line_h;
+  }
+}
+
+void Window::render(const Ppu& ppu, const SidebarData& sidebar_data) {
   if (!is_open_ || hdc_ == nullptr) return;
 
   HWND hwnd = static_cast<HWND>(hwnd_);
@@ -956,33 +1057,43 @@ void Window::render(const Ppu& ppu) {
 
   if (client_w <= 0 || client_h <= 0) return;
 
-  // Recalculate viewport and clear letterbox padding if dimensions or ratio changed
-  if (client_w != last_client_w_ || client_h != last_client_h_ || aspect_ratio_ != last_aspect_ratio_) {
+  const SidebarLayout layout =
+      calculate_sidebar_layout(client_w, client_h, sidebar_enabled_, aspect_ratio_);
+
+  if (client_w != last_client_w_ || client_h != last_client_h_ ||
+      aspect_ratio_ != last_aspect_ratio_ || layout.sidebar_shown != last_sidebar_enabled_) {
     last_client_w_ = client_w;
     last_client_h_ = client_h;
     last_aspect_ratio_ = aspect_ratio_;
-    cached_viewport_ = calculate_viewport_rect(client_w, client_h, aspect_ratio_);
+    last_sidebar_enabled_ = layout.sidebar_shown;
+    cached_viewport_ = layout.game;
 
-    // Clear entire window background to black to remove leftover frames
+    // Clear entire window background to black to remove leftover frames.
     HBRUSH black_brush = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
     FillRect(hdc, &client_rect, black_brush);
   }
+  if (cached_viewport_.width <= 0 || cached_viewport_.height <= 0) {
+    cached_viewport_ = layout.game;
+  }
 
-  const ViewportRect vp = cached_viewport_;
+  const ViewportRect& vp = cached_viewport_;
 
-  // Ensure pillarbox / letterbox margins remain solid black
+  // Keep letterbox margins around the game rect solid black.
+  HBRUSH black_brush = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
   if (vp.x > 0) {
     RECT left_rect = {0, 0, vp.x, client_h};
-    RECT right_rect = {vp.x + vp.width, 0, client_w, client_h};
-    HBRUSH black_brush = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
     FillRect(hdc, &left_rect, black_brush);
-    FillRect(hdc, &right_rect, black_brush);
   }
   if (vp.y > 0) {
-    RECT top_rect = {0, 0, client_w, vp.y};
-    RECT bottom_rect = {0, vp.y + vp.height, client_w, client_h};
-    HBRUSH black_brush = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+    RECT top_rect = {0, 0, vp.x + vp.width, vp.y};
     FillRect(hdc, &top_rect, black_brush);
+  }
+  if (vp.x + vp.width < client_w && !layout.sidebar_shown) {
+    RECT right_rect = {vp.x + vp.width, 0, client_w, client_h};
+    FillRect(hdc, &right_rect, black_brush);
+  }
+  if (vp.y + vp.height < client_h) {
+    RECT bottom_rect = {0, vp.y + vp.height, vp.x + vp.width, client_h};
     FillRect(hdc, &bottom_rect, black_brush);
   }
 
@@ -1029,6 +1140,10 @@ void Window::render(const Ppu& ppu) {
       &bmi,
       DIB_RGB_COLORS,
       SRCCOPY);
+
+  if (layout.sidebar_shown) {
+    draw_sidebar_panel(hdc, sidebar_data, layout);
+  }
 }
 
 #else
@@ -1063,7 +1178,7 @@ Window::Window(int width, int height, const char* /*title*/)
 Window::~Window() {}
 
 bool Window::process_events(Hardware& /*hardware*/) { return false; }
-void Window::render(const Ppu& /*ppu*/) {}
+void Window::render(const Ppu& /*ppu*/, const SidebarData& /*sidebar*/) {}
 void Window::set_aspect_ratio(AspectRatio ratio) { aspect_ratio_ = ratio; }
 void Window::set_internal_resolution(InternalResolution res) { internal_resolution_ = res; }
 void Window::set_video_filter(VideoFilter filter) { video_filter_ = filter; }
@@ -1075,7 +1190,11 @@ std::string Window::consume_pending_rom() { return ""; }
 std::string Window::consume_pending_save_state() { return ""; }
 std::string Window::consume_pending_load_state() { return ""; }
 bool Window::consume_rewind_step() { return false; }
+bool Window::consume_undo_press() { return false; }
 void Window::set_playback_indicator(int /*indicator*/) {}
+void Window::draw_sidebar_panel(void* /*hdc*/, const SidebarData& /*data*/,
+                                const SidebarLayout& /*layout*/) {}
+void Window::set_sidebar_enabled(bool /*enabled*/) {}
 std::string Window::open_file_dialog(void* /*parent_hwnd*/) { return ""; }
 std::string Window::open_savestate_dialog(void* /*parent_hwnd*/) { return ""; }
 std::string Window::save_savestate_dialog(void* /*parent_hwnd*/) { return ""; }
