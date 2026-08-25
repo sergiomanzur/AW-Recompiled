@@ -73,6 +73,9 @@ constexpr UINT IDM_FILE_LOAD_FROM       = 1006;
 constexpr UINT IDM_FILE_REWIND          = 1007;
 constexpr UINT IDM_FILE_FASTFORWARD     = 1008;
 constexpr UINT IDM_FILE_UNDO            = 1009;
+constexpr UINT IDM_FILE_REPLAY_RECORD   = 1010;
+constexpr UINT IDM_FILE_REPLAY_PLAY     = 1011;
+constexpr UINT IDM_FILE_APPLY_PATCH     = 1012;
 constexpr UINT IDM_SAVE_SLOT_1          = 1011;
 constexpr UINT IDM_SAVE_SLOT_2          = 1012;
 constexpr UINT IDM_SAVE_SLOT_3          = 1013;
@@ -100,6 +103,8 @@ constexpr UINT IDM_SETTINGS_SELECT_ROM  = 3001;
 constexpr UINT IDM_SETTINGS_CONTROLS    = 3002;
 constexpr UINT IDM_SETTINGS_TOGGLE_HUD  = 3003;
 constexpr UINT IDM_SETTINGS_SIDEBAR     = 3004;
+constexpr UINT IDM_SETTINGS_INPUT_DISPLAY = 3005;
+constexpr UINT IDM_SETTINGS_HD_TEXT     = 3006;
 constexpr UINT IDM_HELP_CONTROLS        = 4001;
 constexpr UINT IDM_HELP_ABOUT           = 4002;
 
@@ -309,6 +314,30 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
         if (win != nullptr) win->request_rewind_step();
       } else if (id == IDM_FILE_UNDO) {
         if (win != nullptr) win->request_undo();
+      } else if (id == IDM_FILE_REPLAY_RECORD) {
+        if (win != nullptr) win->request_record_toggle();
+      } else if (id == IDM_FILE_REPLAY_PLAY) {
+        if (win != nullptr) {
+          std::string replay_path = Window::open_replay_dialog(hwnd);
+          if (!replay_path.empty()) win->request_replay_playback(replay_path);
+        }
+      } else if (id == IDM_FILE_APPLY_PATCH) {
+        if (win != nullptr) {
+          std::string patch_path = Window::open_patch_dialog(hwnd);
+          if (!patch_path.empty()) {
+            ConfigFile config;
+            config.load("config.ini");
+            config.set_string("Patches", "ips_path", patch_path);
+            const std::string rom = config.get_string("Paths", "rom_path", "");
+            config.save("config.ini");
+            if (!rom.empty()) {
+              // Reboot the same ROM; the game loop applies the staged patch
+              // at boot (see apply_boot_patch in main.cpp).
+              win->set_pending_rom(rom);
+              std::cout << "Patch staged: " << patch_path << " (rebooting)" << std::endl;
+            }
+          }
+        }
       } else if (id == IDM_FILE_FASTFORWARD) {
         if (win != nullptr) win->toggle_fast_forward_latch();
       } else if (id >= IDM_SAVE_SLOT_1 && id <= IDM_SAVE_SLOT_5) {
@@ -372,6 +401,15 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
           config.load("config.ini");
           win->save_config(config);
           std::cout << "Tactical Sidebar: " << (win->sidebar_enabled() ? "ENABLED" : "DISABLED")
+                    << std::endl;
+        }
+      } else if (id == IDM_SETTINGS_HD_TEXT) {
+        if (win != nullptr) {
+          win->toggle_hd_text();
+          ConfigFile config;
+          config.load("config.ini");
+          win->save_config(config);
+          std::cout << "HD Text Replacement: " << (win->hd_text_enabled() ? "ENABLED" : "DISABLED")
                     << std::endl;
         }
       } else if (id == IDM_HELP_ABOUT) {
@@ -460,6 +498,10 @@ Window::Window(int width, int height, const char* title)
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_REWIND, "&Rewind / Time Travel\tBackspace");
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_FASTFORWARD, "&Fast-Forward (toggle)\tTab");
   AppendMenuA(hFileMenu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_REPLAY_RECORD, "&Record Replay\tF6");
+  AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_REPLAY_PLAY, "&Play Replay...");
+  AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_APPLY_PATCH, "Apply &IPS Patch...");
+  AppendMenuA(hFileMenu, MF_SEPARATOR, 0, nullptr);
   AppendMenuA(hFileMenu, MF_STRING, IDM_FILE_EXIT, "E&xit");
 
   // Display Submenus
@@ -491,6 +533,8 @@ Window::Window(int width, int height, const char* title)
   AppendMenuA(hSettingsMenu, MF_SEPARATOR, 0, nullptr);
   AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_TOGGLE_HUD, "Show &Tactical Intel HUD Overlay\tF2");
   AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_SIDEBAR, "Show Tactical &Sidebar (widescreen)\tF4");
+  AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_INPUT_DISPLAY, "Show &Input Display + Frame Counter\tF8");
+  AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_HD_TEXT, "HD &Text Replacement (needs pack)");
 
   // Help Menu
   AppendMenuA(hHelpMenu, MF_STRING, IDM_HELP_CONTROLS, "&Controls Info...");
@@ -746,12 +790,16 @@ void Window::load_config(const ConfigFile& config) {
   const int filter = config.get_int("Display", "video_filter", 1);
   const int hud = config.get_int("Display", "show_hud", 1);
   const int sidebar = config.get_int("Display", "sidebar", 1);
+  const int input_display = config.get_int("Replay", "input_display", 1);
+  const int hd_text = config.get_int("Display", "hd_text", 0);
 
   set_aspect_ratio(static_cast<AspectRatio>(std::clamp(aspect, 0, 5)));
   set_internal_resolution(static_cast<InternalResolution>(std::clamp(res, 0, 3)));
   set_video_filter(static_cast<VideoFilter>(std::clamp(filter, 0, 2)));
   set_show_hud(hud != 0);
   set_sidebar_enabled(sidebar != 0);
+  set_input_display(input_display != 0);
+  if (hd_text != 0) set_hd_text_enabled(true);
 
   input_mapping_.load_from_config(config);
 }
@@ -762,6 +810,8 @@ void Window::save_config(ConfigFile& config) const {
   config.set_int("Display", "video_filter", static_cast<int>(video_filter_));
   config.set_int("Display", "show_hud", show_hud_ ? 1 : 0);
   config.set_int("Display", "sidebar", sidebar_enabled_ ? 1 : 0);
+  config.set_int("Display", "hd_text", hd_text_enabled_ ? 1 : 0);
+  config.set_int("Replay", "input_display", input_display_ ? 1 : 0);
   if (!pending_rom_path_.empty()) {
     config.set_string("Paths", "rom_path", pending_rom_path_);
   }
@@ -805,6 +855,9 @@ void Window::update_menu_checks() {
 
   CheckMenuItem(hMenuBar, IDM_SETTINGS_TOGGLE_HUD, show_hud_ ? MF_CHECKED : MF_UNCHECKED);
   CheckMenuItem(hMenuBar, IDM_SETTINGS_SIDEBAR, sidebar_enabled_ ? MF_CHECKED : MF_UNCHECKED);
+  CheckMenuItem(hMenuBar, IDM_SETTINGS_INPUT_DISPLAY, input_display_ ? MF_CHECKED : MF_UNCHECKED);
+  CheckMenuItem(hMenuBar, IDM_SETTINGS_HD_TEXT, hd_text_enabled_ ? MF_CHECKED : MF_UNCHECKED);
+  CheckMenuItem(hMenuBar, IDM_FILE_REPLAY_RECORD, recording_ui_ ? MF_CHECKED : MF_UNCHECKED);
   CheckMenuItem(hMenuBar, IDM_FILE_FASTFORWARD, fast_forward_latch_ ? MF_CHECKED : MF_UNCHECKED);
 }
 
@@ -868,6 +921,40 @@ std::string Window::save_savestate_dialog(void* parent_hwnd) {
   ofn.lpstrTitle = "Save State As...";
 
   if (GetSaveFileNameA(&ofn) == TRUE) {
+    return std::string(file_name);
+  }
+  return "";
+}
+
+std::string Window::open_replay_dialog(void* parent_hwnd) {
+  char file_name[MAX_PATH] = "";
+  OPENFILENAMEA ofn = {};
+  ofn.lStructSize = sizeof(OPENFILENAMEA);
+  ofn.hwndOwner = static_cast<HWND>(parent_hwnd);
+  ofn.lpstrFilter = "AW-Recompiled Replays (*.awr)\0*.awr\0All Files (*.*)\0*.*\0";
+  ofn.lpstrFile = file_name;
+  ofn.nMaxFile = MAX_PATH;
+  ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+  ofn.lpstrTitle = "Select Replay File";
+
+  if (GetOpenFileNameA(&ofn) == TRUE) {
+    return std::string(file_name);
+  }
+  return "";
+}
+
+std::string Window::open_patch_dialog(void* parent_hwnd) {
+  char file_name[MAX_PATH] = "";
+  OPENFILENAMEA ofn = {};
+  ofn.lStructSize = sizeof(OPENFILENAMEA);
+  ofn.hwndOwner = static_cast<HWND>(parent_hwnd);
+  ofn.lpstrFilter = "IPS Patches (*.ips)\0*.ips\0All Files (*.*)\0*.*\0";
+  ofn.lpstrFile = file_name;
+  ofn.nMaxFile = MAX_PATH;
+  ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+  ofn.lpstrTitle = "Select IPS Patch (applied on next boot)";
+
+  if (GetOpenFileNameA(&ofn) == TRUE) {
     return std::string(file_name);
   }
   return "";
@@ -960,6 +1047,25 @@ bool Window::process_events(Hardware& hardware) {
   }
   f4_key_was_down_ = f4_is_down;
 
+  // F6: toggle replay recording. F7: stop replay playback. F8: input display.
+  const bool f6_is_down = (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
+  if (f6_is_down && !f6_key_was_down_) record_toggle_requested_ = true;
+  f6_key_was_down_ = f6_is_down;
+
+  const bool f7_is_down = (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
+  if (f7_is_down && !f7_key_was_down_) playback_stop_requested_ = true;
+  f7_key_was_down_ = f7_is_down;
+
+  const bool f8_is_down = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
+  if (f8_is_down && !f8_key_was_down_) {
+    set_input_display(!input_display_);
+    ConfigFile config;
+    config.load("config.ini");
+    save_config(config);
+    std::cout << "Input Display: " << (input_display_ ? "ENABLED" : "DISABLED") << std::endl;
+  }
+  f8_key_was_down_ = f8_is_down;
+
   return is_open_;
 }
 
@@ -967,6 +1073,52 @@ bool Window::consume_undo_press() {
   if (!undo_requested_) return false;
   undo_requested_ = false;
   return true;
+}
+
+bool Window::consume_record_toggle() {
+  if (!record_toggle_requested_) return false;
+  record_toggle_requested_ = false;
+  return true;
+}
+
+bool Window::consume_playback_stop() {
+  if (!playback_stop_requested_) return false;
+  playback_stop_requested_ = false;
+  return true;
+}
+
+std::string Window::consume_pending_replay() {
+  std::string path = std::move(pending_replay_path_);
+  pending_replay_path_.clear();
+  return path;
+}
+
+void Window::set_recording_ui(bool recording) {
+  recording_ui_ = recording;
+  update_menu_checks();
+}
+
+void Window::set_input_display(bool on) {
+  input_display_ = on;
+  update_menu_checks();
+  if (hwnd_ != nullptr) {
+    InvalidateRect(static_cast<HWND>(hwnd_), nullptr, TRUE);
+  }
+}
+
+void Window::set_hd_text_enabled(bool enabled) {
+  hd_text_enabled_ = enabled;
+  if (enabled && !hd_text_pack_loaded_) {
+    hd_text_pack_loaded_ = true;
+    if (!hd_pack_.load("data/hd/tiles/tiles.ini")) {
+      std::cout << "HD text: no pack at data/hd/tiles/tiles.ini (run aw-hd-capture to build one)"
+                << std::endl;
+    }
+  }
+  update_menu_checks();
+  if (hwnd_ != nullptr) {
+    InvalidateRect(static_cast<HWND>(hwnd_), nullptr, TRUE);
+  }
 }
 
 bool Window::consume_rewind_step() {
@@ -1104,7 +1256,22 @@ void Window::render(const Ppu& ppu, const SidebarData& sidebar_data) {
   int src_w = ppu.width;
   int src_h = ppu.height;
 
-  if (video_filter_ == VideoFilter::Scale2x && !scale2x_buffer_.empty()) {
+  // HD text: upscale 2x, then let the pack overwrite matched glyph blocks
+  // with 16x16 replacements. Works on top of any base filter.
+  if (hd_text_enabled_ && hd_pack_.loaded()) {
+    scale2x_buffer_.resize((src_w * 2) * (src_h * 2));
+    for (int y = 0; y < src_h * 2; ++y) {
+      for (int x = 0; x < src_w * 2; ++x) {
+        scale2x_buffer_[static_cast<std::size_t>(y) * (src_w * 2) + x] =
+            ppu.framebuffer[(y / 2) * src_w + (x / 2)];
+      }
+    }
+    apply_hd_text(ppu.framebuffer.data(), src_w, src_h,
+                  scale2x_buffer_.data(), src_w * 2, hd_pack_);
+    render_data = scale2x_buffer_.data();
+    src_w = src_w * 2;
+    src_h = src_h * 2;
+  } else if (video_filter_ == VideoFilter::Scale2x && !scale2x_buffer_.empty()) {
     scale2x_buffer_.resize((src_w * 2) * (src_h * 2));
     apply_scale2x(ppu.framebuffer.data(), scale2x_buffer_.data(), src_w, src_h);
     render_data = scale2x_buffer_.data();
@@ -1191,6 +1358,12 @@ std::string Window::consume_pending_save_state() { return ""; }
 std::string Window::consume_pending_load_state() { return ""; }
 bool Window::consume_rewind_step() { return false; }
 bool Window::consume_undo_press() { return false; }
+bool Window::consume_record_toggle() { return false; }
+bool Window::consume_playback_stop() { return false; }
+std::string Window::consume_pending_replay() { return ""; }
+void Window::set_recording_ui(bool /*recording*/) {}
+void Window::set_input_display(bool /*on*/) {}
+void Window::set_hd_text_enabled(bool /*enabled*/) {}
 void Window::set_playback_indicator(int /*indicator*/) {}
 void Window::draw_sidebar_panel(void* /*hdc*/, const SidebarData& /*data*/,
                                 const SidebarLayout& /*layout*/) {}
@@ -1198,6 +1371,8 @@ void Window::set_sidebar_enabled(bool /*enabled*/) {}
 std::string Window::open_file_dialog(void* /*parent_hwnd*/) { return ""; }
 std::string Window::open_savestate_dialog(void* /*parent_hwnd*/) { return ""; }
 std::string Window::save_savestate_dialog(void* /*parent_hwnd*/) { return ""; }
+std::string Window::open_replay_dialog(void* /*parent_hwnd*/) { return ""; }
+std::string Window::open_patch_dialog(void* /*parent_hwnd*/) { return ""; }
 void Window::update_menu_checks() {}
 
 #endif

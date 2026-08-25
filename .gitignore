@@ -33,3 +33,6 @@ Thumbs.db
 # cursor miner. Contain ROM-derived data and must never be committed.
 *.ss
 
+
+# Replay recordings (inputs only, safe to share, but runtime artifacts)
+*.awr

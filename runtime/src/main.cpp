@@ -6,6 +6,7 @@
 #include "aw/cpu_state.hpp"
 #include "aw/generated_blocks.hpp"
 #include "aw/hardware.hpp"
+#include "aw/ips.hpp"
 #include "aw/map_sensor.hpp"
 #include "aw/nav/nav_controller.hpp"
 #include "aw/hd_audio.hpp"
@@ -17,6 +18,7 @@
 #include "aw/render/hud_overlay.hpp"
 #include "aw/render/pointer_overlay.hpp"
 #include "aw/render/sidebar.hpp"
+#include "aw/replay.hpp"
 #include "aw/rewind.hpp"
 #include "aw/rom.hpp"
 #include "aw/tactical_intel.hpp"
@@ -25,6 +27,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <ctime>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -90,6 +93,8 @@ struct Options {
   bool is_double_click = false;
   int max_frames = 0;  // 0 = unlimited (interactive play)
   bool rewind_smoke = false;  // Exercise the rewind ring headlessly
+  std::string ips_path;       // IPS patch applied at boot (randomizer hook)
+  std::string replay_path;    // Replay played automatically at boot
   std::string oam_log_path;  // Non-empty enables per-frame OAM delta logging
 };
 
@@ -106,6 +111,14 @@ Options parse_options(int argc, char** argv) {
       options.play_enabled = true;
     } else if (arg == "--rewind-smoke") {
       options.rewind_smoke = true;
+    } else if (arg == "--ips" && i + 1 < argc) {
+      options.ips_path = argv[++i];
+    } else if (arg.rfind("--ips=", 0) == 0) {
+      options.ips_path = arg.substr(6);
+    } else if (arg == "--replay" && i + 1 < argc) {
+      options.replay_path = argv[++i];
+    } else if (arg.rfind("--replay=", 0) == 0) {
+      options.replay_path = arg.substr(9);
     } else if (arg.rfind("--frames=", 0) == 0) {
       options.max_frames = (std::max)(0, std::stoi(arg.substr(9)));
     } else if (arg == "--frames" && i + 1 < argc) {
@@ -182,8 +195,22 @@ aw::RewindIo make_rewind_io(struct mCore* core) {
   return io;
 }
 
+std::string timestamp_string() {
+  const std::time_t now = std::time(nullptr);
+  std::tm tm_value{};
+#ifdef _WIN32
+  localtime_s(&tm_value, &now);
+#else
+  localtime_r(&now, &tm_value);
+#endif
+  char buffer[32];
+  std::strftime(buffer, sizeof(buffer), "%Y%m%d_%H%M%S", &tm_value);
+  return buffer;
+}
+
 void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_frames,
-                   const std::string& oam_log_path, bool rewind_smoke) {
+                   const std::string& oam_log_path, bool rewind_smoke,
+                   const std::string& boot_ips, const std::string& boot_replay) {
   try {
     auto ppu_ptr = std::make_unique<aw::Ppu>();
     auto& ppu = *ppu_ptr;
@@ -197,8 +224,43 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       window.load_config(config);
     }
 
+    // Randomizer hook #1: an IPS patch applied to the ROM image before the
+    // core ever sees it. Any community randomizer patch drops in via
+    // File > Apply IPS Patch (persisted) or --ips on the command line; the
+    // patched image exists only as a temp file while playing.
     std::vector<std::uint32_t> mgba_buffer(240 * 160, 0);
-    struct mCore* core = aw_mgba_create(rom_path.string().c_str(), mgba_buffer.data(), 240);
+    std::filesystem::path patched_rom_temp;
+    const auto create_core_for = [&](const std::string& path) -> struct mCore* {
+      aw::RomImage image = aw::load_rom_file(path);
+      std::string effective_path = path;
+      std::string ips = !boot_ips.empty() ? boot_ips : config.get_string("Patches", "ips_path", "");
+      if (!ips.empty()) {
+        std::ifstream patch_in(ips, std::ios::binary);
+        if (!patch_in.is_open()) {
+          std::cerr << "IPS patch not found: " << ips << " (booting unpatched)" << std::endl;
+        } else {
+          const std::vector<std::uint8_t> patch_bytes((std::istreambuf_iterator<char>(patch_in)),
+                                                      std::istreambuf_iterator<char>());
+          std::string err;
+          if (!aw::apply_ips(image.bytes, patch_bytes, err)) {
+            std::cerr << "IPS patch rejected: " << err << " (booting unpatched)" << std::endl;
+          } else {
+            const std::string patched_sha = aw::sha1_hex(image.bytes);
+            patched_rom_temp = std::filesystem::temp_directory_path() /
+                               ("aw_" + patched_sha.substr(0, 8) + ".gba");
+            std::ofstream out(patched_rom_temp, std::ios::binary);
+            out.write(reinterpret_cast<const char*>(image.bytes.data()),
+                      static_cast<std::streamsize>(image.bytes.size()));
+            std::cout << "IPS patch applied: " << ips << " (patched sha1 "
+                      << patched_sha.substr(0, 12) << "...)" << std::endl;
+            effective_path = patched_rom_temp.string();
+          }
+        }
+      }
+      return aw_mgba_create(effective_path.c_str(), mgba_buffer.data(), 240);
+    };
+
+    struct mCore* core = create_core_for(rom_path.string());
     if (!core) {
       throw std::runtime_error("aw_mgba_create failed for ROM: " + rom_path.string());
     }
@@ -240,6 +302,37 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
     // mined cursor coordinates answering the D-pad - the one verified
     // game-state read this project has.
     aw::MapSensor map_sensor;
+
+    // Replays: record the exact keys_pressed stream from power-on (F6), and
+    // play it back (File > Play Replay). The core is deterministic, so the
+    // stream alone reproduces the run; the ROM sha1 travels in the header so
+    // mismatches are caught up front.
+    const std::string rom_sha = aw::sha1_hex(rom.bytes);
+    aw::ReplayRecorder replay_recorder;
+    aw::ReplayPlayer replay_player;
+    bool replay_playing = false;
+
+    // Randomizer hook #2: one-shot RAM writes shortly after boot, driven by
+    // config so a mined address becomes a tweak without a rebuild:
+    //   [Randomize]
+    //   apply_frame = 90
+    //   write1 = 50345636:7
+    // (decimal address:value). See data/symbols/README.md for mining.
+    struct RamWrite {
+      std::uint32_t addr;
+      std::uint8_t value;
+    };
+    std::vector<RamWrite> randomize_writes;
+    const int randomize_frame = std::clamp(config.get_int("Randomize", "apply_frame", 90), 1, 100000);
+    for (int slot = 1; slot <= 64; ++slot) {
+      const std::string spec = config.get_string("Randomize", "write" + std::to_string(slot), "");
+      if (spec.empty()) continue;
+      const std::size_t colon = spec.find(':');
+      if (colon == std::string::npos) continue;
+      randomize_writes.push_back({static_cast<std::uint32_t>(std::stoul(spec.substr(0, colon))),
+                                  static_cast<std::uint8_t>(std::stoul(spec.substr(colon + 1)))});
+    }
+    bool randomize_applied = false;
 
     // Fast-forward runs core frames in a time-bounded burst between renders
     // so the CPU spends its budget emulating instead of blitting. The frame
@@ -288,6 +381,36 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
     double telemetry_fps = 0.0;
     double telemetry_speed_pct = 100.0;
 
+    // Return the core to frame 0 and drop every per-timeline subsystem.
+    // Replay record and playback both start here; without it the input
+    // stream alone could not reproduce the run.
+    const auto power_cycle = [&]() {
+      aw_mgba_reset(core);
+      frames_run = 0;
+      telemetry_frames_base = 0;
+      telemetry_start = clock::now();
+      prev_keys = 0;
+      audio.drop_pending();
+      rewind_buffer.reset();
+      order_stack.reset();
+      map_sensor.reset();
+      randomize_applied = false;
+    };
+
+    // Boot-time replay (--replay): start playback immediately.
+    if (!boot_replay.empty()) {
+      std::string err;
+      if (replay_player.load(boot_replay, err) && replay_player.rom_matches(rom_sha)) {
+        power_cycle();
+        replay_playing = true;
+        std::cout << "Replay: playing " << boot_replay << " ("
+                  << replay_player.info().frame_count << " frames)" << std::endl;
+      } else {
+        std::cerr << "Replay: cannot play " << boot_replay
+                  << (err.empty() ? " (ROM sha1 mismatch)" : (" (" + err + ")")) << std::endl;
+      }
+    }
+
     auto copy_video_frame = [&mgba_buffer, &ppu]() {
       // Copy mGBA video buffer to PPU framebuffer with R/B channel swapping for Win32 GDI
       const std::uint32_t* src_buf = mgba_buffer.data();
@@ -302,9 +425,15 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       if (window.has_pending_rom()) {
         const std::string new_rom_path = window.consume_pending_rom();
         std::cout << "Switching to new ROM: " << new_rom_path << std::endl;
+        if (replay_recorder.active()) {
+          replay_recorder.stop();
+          window.set_recording_ui(false);
+          std::cout << "Replay: recording finalized (ROM switch)" << std::endl;
+        }
+        replay_playing = false;
         aw_mgba_destroy(core);
         rom_path = new_rom_path;
-        core = aw_mgba_create(rom_path.string().c_str(), mgba_buffer.data(), 240);
+        core = create_core_for(new_rom_path);
         if (!core) {
           throw std::runtime_error("aw_mgba_create failed for new ROM: " + rom_path.string());
         }
@@ -327,6 +456,50 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         break;
       }
 
+      // --- Replay control (F6 record toggle, F7 stop, File > Play).
+      if (window.consume_record_toggle()) {
+        if (replay_recorder.active()) {
+          replay_recorder.stop();
+          window.set_recording_ui(false);
+          std::cout << "Replay: saved " << replay_recorder.frames() << " frames to "
+                    << replay_recorder.path() << std::endl;
+        } else {
+          replay_playing = false;
+          power_cycle();
+          const std::string name = "replay_" + timestamp_string() + ".awr";
+          if (replay_recorder.start(name, rom_sha)) {
+            window.set_recording_ui(true);
+            std::cout << "Replay: recording from power-on -> " << name
+                      << " (F6 again to finish)" << std::endl;
+          }
+        }
+      }
+      if (window.consume_playback_stop() && replay_playing) {
+        replay_playing = false;
+        std::cout << "Replay: playback stopped at frame " << replay_player.frame_index() << "/"
+                  << replay_player.info().frame_count << std::endl;
+      }
+      if (window.has_pending_replay()) {
+        const std::string replay_path_req = window.consume_pending_replay();
+        std::string err;
+        if (!replay_player.load(replay_path_req, err)) {
+          std::cerr << "Replay: " << err << std::endl;
+        } else if (!replay_player.rom_matches(rom_sha)) {
+          std::cerr << "Replay: recorded for a different ROM revision - refusing to play"
+                    << std::endl;
+        } else {
+          if (replay_recorder.active()) {
+            replay_recorder.stop();
+            window.set_recording_ui(false);
+          }
+          power_cycle();
+          replay_playing = true;
+          std::cout << "Replay: playing " << replay_path_req << " ("
+                    << replay_player.info().frame_count << " frames, Tab fast-forwards)"
+                    << std::endl;
+        }
+      }
+
       // Process pending Save State request
       const std::string save_request = window.consume_pending_save_state();
       if (!save_request.empty()) {
@@ -340,7 +513,10 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       // Process pending Load State request
       const std::string load_request = window.consume_pending_load_state();
       if (!load_request.empty()) {
-        if (aw_mgba_load_state(core, load_request.c_str())) {
+        if (replay_playing) {
+          std::cout << "Replay: load state ignored during playback (it would desync)"
+                    << std::endl;
+        } else if (aw_mgba_load_state(core, load_request.c_str())) {
           std::cout << "Successfully loaded state from: " << load_request << std::endl;
           // Audio queued before the load belongs to the abandoned timeline.
           audio.drop_pending();
@@ -392,7 +568,9 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       if (!did_rewind && !rewind_held) {
         // --- Undo Last Order: restore the snapshot taken at the A press
         // that confirmed the order (Ctrl+Z, pad L3, or the File menu).
-        if (window.consume_undo_press()) {
+        // Meaningless during replay playback: the input stream, not the
+        // player, owns the timeline.
+        if (!replay_playing && window.consume_undo_press()) {
           if (order_stack.pop()) {
             ++undo_points_taken;
             audio.drop_pending();
@@ -408,6 +586,19 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
           }
         }
 
+        // Replay playback owns this frame's keys; the recorder logs whatever
+        // keys are actually fed to the core.
+        if (replay_playing) {
+          std::uint16_t replay_keys = 0;
+          if (replay_player.next(replay_keys)) {
+            hardware.keys_pressed = replay_keys;
+          } else {
+            replay_playing = false;
+            std::cout << "Replay: playback finished ("
+                      << replay_player.info().frame_count << " frames)" << std::endl;
+          }
+        }
+
         // --- Normal / fast-forward emulation.
         if (ff_active) {
           if (!ff_was_active) {
@@ -418,8 +609,20 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
           }
           const auto burst_start = clock::now();
           int burst_frames = 0;
+          std::uint16_t burst_keys = hardware.keys_pressed;
           do {
-            aw_mgba_run_frame(core, hardware.keys_pressed);
+            if (replay_playing) {
+              // Fast-forwarding a replay still consumes one input record per
+              // emulated frame.
+              if (!replay_player.next(burst_keys)) {
+                replay_playing = false;
+                std::cout << "Replay: playback finished ("
+                          << replay_player.info().frame_count << " frames)" << std::endl;
+                burst_keys = 0;
+              }
+            }
+            if (replay_recorder.active()) replay_recorder.record(burst_keys);
+            aw_mgba_run_frame(core, burst_keys);
             ++frames_run;
             ++burst_frames;
             aw_mgba_read_audio(core, audio_samples.data(), audio_samples.size() / 2);
@@ -427,7 +630,7 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
           } while (burst_frames < kFastForwardBurstMaxFrames &&
                    (burst_frames < kFastForwardBurstMinFrames ||
                     clock::now() - burst_start < kFastForwardBurstBudget));
-          prev_keys = hardware.keys_pressed;
+          prev_keys = burst_keys;
         } else {
           if (ff_was_active) {
             std::cout << "Fast-forward: back to 1x" << std::endl;
@@ -443,19 +646,31 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
           // unit moved / the menu opened.
           const bool a_edge = (hardware.keys_pressed & aw::kKeyA) != 0 &&
                               (prev_keys & aw::kKeyA) == 0;
-          if (a_edge && map_sensor.in_map()) {
+          if (a_edge && map_sensor.in_map() && !replay_playing) {
             if (order_stack.push() && !undo_capture_logged) {
               undo_capture_logged = true;
               std::cout << "Undo: order point captured (Ctrl+Z to restore)" << std::endl;
             }
           }
 
+          if (replay_recorder.active()) replay_recorder.record(hardware.keys_pressed);
           aw_mgba_run_frame(core, hardware.keys_pressed);
           frames_run++;
           rewind_buffer.on_frame();
           map_sensor.on_frame(hardware.keys_pressed,
                               read_cursor_tile(probe, nav.cursor_addresses()));
           prev_keys = hardware.keys_pressed;
+
+          // Randomizer hook #2: one-shot RAM writes shortly after boot.
+          if (!randomize_writes.empty() && !randomize_applied &&
+              frames_run >= static_cast<std::uint64_t>(randomize_frame)) {
+            for (const auto& write : randomize_writes) {
+              aw_mgba_write8(core, write.addr, write.value);
+            }
+            randomize_applied = true;
+            std::cout << "Randomize: applied " << randomize_writes.size()
+                      << " RAM write(s) at frame " << frames_run << std::endl;
+          }
 
           // Check for audio sample rate changes from core (e.g. SOUNDBIAS 32768 Hz <-> 65536 Hz)
           const unsigned current_rate = aw_mgba_audio_sample_rate(core);
@@ -497,6 +712,13 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
         aw::draw_hud_overlay(ppu.framebuffer.data(), ppu.width, ppu.height, intel, false);
       }
 
+      // Speedrun status strip: frame counter + held buttons (+ REC/PLAY).
+      if (window.input_display()) {
+        aw::draw_status_overlay(ppu.framebuffer.data(), ppu.width, ppu.height,
+                                hardware.keys_pressed, frames_run,
+                                replay_recorder.active(), replay_playing);
+      }
+
       // Render frame to window, with the tactical sidebar beside the game.
       aw::SidebarData sidebar;
       sidebar.fast_forward = ff_active;
@@ -513,6 +735,12 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       sidebar.fps = telemetry_fps;
       sidebar.emu_speed_pct = telemetry_speed_pct;
       sidebar.frames_run = frames_run;
+      sidebar.replay_recording = replay_recorder.active();
+      sidebar.replay_playing = replay_playing;
+      sidebar.replay_frame = replay_playing ? replay_player.frame_index()
+                                            : replay_recorder.frames();
+      sidebar.replay_total = replay_player.info().frame_count;
+      sidebar.live_keys = hardware.keys_pressed;
       sidebar.forecast = intel.forecast();
       window.render(ppu, sidebar);
 
@@ -567,6 +795,12 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       }
     }
 
+    if (replay_recorder.active()) {
+      replay_recorder.stop();
+      std::cout << "Replay: saved " << replay_recorder.frames() << " frames to "
+                << replay_recorder.path() << std::endl;
+    }
+
     std::cout << "Ran " << frames_run << " frames; audio samples emitted: " << total_audio_samples << std::endl;
     aw_mgba_destroy(core);
   } catch (const std::exception& e) {
@@ -593,7 +827,7 @@ int main(int argc, char** argv) {
 
     if (options.play_enabled) {
       run_game_loop(options.rom_path, rom, options.max_frames, options.oam_log_path,
-                    options.rewind_smoke);
+                    options.rewind_smoke, options.ips_path, options.replay_path);
     }
   } catch (const std::exception& e) {
     std::cerr << "Fatal error: " << e.what() << std::endl;

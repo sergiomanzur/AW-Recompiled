@@ -1,5 +1,7 @@
 #include "aw/render/hud_overlay.hpp"
 
+#include "aw/hardware.hpp"
+
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -166,6 +168,60 @@ void draw_hud_overlay(std::uint32_t* fb, int fb_w, int fb_h,
   // Line 3: Terrain Defense & Movement
   std::string line3 = "TERRAIN: " + unit.terrain_name + " | MOVE: " + std::to_string(unit.move_range) + " (" + unit.move_type + ")";
   draw_text(fb, fb_w, fb_h, bot_x + 4, bot_y + 26, line3, 0xFF7ED321u);
+}
+
+void draw_status_overlay(std::uint32_t* fb, int fb_w, int fb_h,
+                         std::uint16_t keys, std::uint64_t frame_count,
+                         bool recording, bool playing) {
+  if (fb == nullptr || fb_w <= 0 || fb_h <= 0) return;
+
+  struct ButtonBox {
+    char label;
+    std::uint16_t mask;
+  };
+  static const ButtonBox kButtons[] = {
+    {'^', aw::kKeyUp}, {'v', aw::kKeyDown}, {'<', aw::kKeyLeft}, {'>', aw::kKeyRight},
+    {'A', aw::kKeyA}, {'B', aw::kKeyB}, {'L', aw::kKeyL}, {'R', aw::kKeyR},
+    {'S', aw::kKeyStart}, {'s', aw::kKeySelect},
+  };
+  constexpr int kBoxCount = 10;
+
+  // Layout from the right edge: [REC/PLAY marker] [frame counter] [boxes]
+  const int box_w = 11;
+  const int boxes_w = kBoxCount * box_w;
+  const std::string counter = "F" + std::to_string(frame_count);
+  const int counter_w = static_cast<int>(counter.size()) * 6 + 4;
+  const std::string marker = recording ? "REC" : (playing ? "PLAY" : "");
+  const int marker_w = marker.empty() ? 0 : static_cast<int>(marker.size()) * 6 + 8;
+
+  const int strip_w = marker_w + counter_w + boxes_w + 6;
+  const int strip_h = 13;
+  const int strip_x = fb_w - strip_w - 3;
+  const int strip_y = 2;
+  if (strip_x < 0) return;  // Degenerate sizes: draw nothing.
+
+  draw_rect(fb, fb_w, fb_h, strip_x, strip_y, strip_w, strip_h, 0xDD0B121Cu);
+  draw_rect(fb, fb_w, fb_h, strip_x, strip_y, strip_w, 1, 0xFF4A90E2u);
+  draw_rect(fb, fb_w, fb_h, strip_x, strip_y + strip_h - 1, strip_w, 1, 0xFF4A90E2u);
+
+  int x = strip_x + 3;
+  if (!marker.empty()) {
+    draw_text(fb, fb_w, fb_h, x, strip_y + 3, marker,
+              recording ? 0xFFFF5555u : 0xFF50E3C2u);
+    x += marker_w;
+  }
+  draw_text(fb, fb_w, fb_h, x, strip_y + 3, counter, 0xFFA0AAB8u);
+  x += counter_w;
+
+  for (int i = 0; i < kBoxCount; ++i) {
+    const bool held = (keys & kButtons[i].mask) != 0;
+    const int bx = x + i * box_w;
+    draw_rect(fb, fb_w, fb_h, bx, strip_y + 2, box_w - 1, 9,
+              held ? 0xFF1F6FEBu : 0xFF222A35u);
+    char label[2] = {kButtons[i].label, '\0'};
+    draw_text(fb, fb_w, fb_h, bx + 3, strip_y + 3, label,
+              held ? 0xFFFFFFFFu : 0xFF707A86u);
+  }
 }
 
 }  // namespace aw

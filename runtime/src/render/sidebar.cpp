@@ -77,6 +77,31 @@ std::vector<std::pair<std::string, bool>> sidebar_panel_lines(const SidebarData&
   lines.emplace_back("SPEED     " + format_speed(data), false);
   lines.emplace_back("FRAMES    " + std::to_string(data.frames_run), false);
 
+  if (data.replay_recording || data.replay_playing) {
+    lines.emplace_back("REPLAY", true);
+    if (data.replay_recording) {
+      lines.emplace_back("RECORDING  frame " + std::to_string(data.replay_frame), false);
+    } else {
+      lines.emplace_back("PLAYBACK   " + std::to_string(data.replay_frame) + "/" +
+                             std::to_string(data.replay_total),
+                         false);
+    }
+  }
+
+  // Live input readout: one letter per held GBA button.
+  std::string input = "INPUT     ";
+  input += (data.live_keys & 0x40) ? "^" : "-";
+  input += (data.live_keys & 0x80) ? "v" : "-";
+  input += (data.live_keys & 0x20) ? "<" : "-";
+  input += (data.live_keys & 0x10) ? ">" : "-";
+  input += " ";
+  input += (data.live_keys & 0x01) ? "A" : "-";
+  input += (data.live_keys & 0x02) ? "B" : "-";
+  input += (data.live_keys & 0x100) ? "L" : "-";
+  input += (data.live_keys & 0x200) ? "R" : "-";
+  input += (data.live_keys & 0x08) ? "ST" : "--";
+  lines.emplace_back(input, false);
+
   if (data.forecast.valid) {
     lines.emplace_back("FORECAST", true);
     lines.emplace_back(std::string(data.forecast.attacker_name) + " vs " +

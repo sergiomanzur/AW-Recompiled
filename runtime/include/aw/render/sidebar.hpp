@@ -35,6 +35,13 @@ struct SidebarData {
   double emu_speed_pct = 100.0;
   std::uint64_t frames_run = 0;
 
+  // Replay / input display
+  bool replay_recording = false;
+  bool replay_playing = false;
+  std::uint32_t replay_frame = 0;
+  std::uint32_t replay_total = 0;
+  std::uint16_t live_keys = 0;
+
   // Combat forecast; valid only when real attacker/defender data exists.
   DamageForecast forecast{};
 };

@@ -33,6 +33,7 @@ add_library(aw_runtime STATIC
   src/nav/nav_controller.cpp
   src/nav/pointer_nav.cpp
   src/order_stack.cpp
+  src/ips.cpp
   src/map_sensor.cpp
   src/ppu.cpp
   src/probe/backend_mgba.cpp
@@ -40,9 +41,11 @@ add_library(aw_runtime STATIC
   src/probe/cursor_probe.cpp
   src/probe/oam.cpp
   src/probe/oam_tracker.cpp
+  src/render/hd_text.cpp
   src/render/hud_overlay.cpp
   src/render/pointer_overlay.cpp
   src/render/sidebar.cpp
+  src/replay.cpp
   src/rewind.cpp
   src/rom.cpp
   src/tactical_intel.cpp
@@ -350,6 +353,45 @@ target_link_libraries(sidebar_tests PRIVATE aw_runtime)
 
 add_test(NAME sidebar_tests COMMAND sidebar_tests)
 
+add_executable(replay_tests
+  tests/replay_tests.cpp
+)
+
+target_include_directories(replay_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_BINARY_DIR}/generated
+)
+
+target_link_libraries(replay_tests PRIVATE aw_runtime)
+
+add_test(NAME replay_tests COMMAND replay_tests)
+
+add_executable(ips_tests
+  tests/ips_tests.cpp
+)
+
+target_include_directories(ips_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_BINARY_DIR}/generated
+)
+
+target_link_libraries(ips_tests PRIVATE aw_runtime)
+
+add_test(NAME ips_tests COMMAND ips_tests)
+
+add_executable(hd_text_tests
+  tests/hd_text_tests.cpp
+)
+
+target_include_directories(hd_text_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_BINARY_DIR}/generated
+)
+
+target_link_libraries(hd_text_tests PRIVATE aw_runtime)
+
+add_test(NAME hd_text_tests COMMAND hd_text_tests)
+
 add_executable(advance-wars-native
   src/main.cpp
 )
@@ -416,3 +458,13 @@ target_include_directories(aw-boot-probe PRIVATE
 )
 
 target_link_libraries(aw-boot-probe PRIVATE aw_runtime)
+
+add_executable(aw-hd-capture
+  tools/hd_capture.cpp
+)
+
+target_include_directories(aw-hd-capture PRIVATE
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
+)
+
+target_link_libraries(aw-hd-capture PRIVATE aw_runtime)

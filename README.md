@@ -15,6 +15,9 @@
 - 📊 **Tactical Sidebar**: In widescreen aspect ratios the game keeps its pixel-perfect 3:2 frame while a native console panel fills the extra space — playback mode, cursor tile, undo/rewind depth, and emulation telemetry (`F4` to toggle). Only verified game-state reads are shown; nothing is invented.
 - ⏪ **Instant Turn Rewind (Time Travel)**: Hold `Backspace` to rewind through an in-RAM savestate ring (5-second window by default) — no savestate files, no reloads.
 - ⚡ **Zero-Latency Fast-Forward**: Hold `Tab` (or a controller trigger) to blast through AI turns at hundreds of FPS with clean, pitch-correct 1x audio on release.
+- 🎬 **Replays + Input Display**: `F6` records a run from power-on to a tiny shareable `.awr` file (inputs only — no ROM data); play them back via **File → Play Replay**, even fast-forwarded. `F8` toggles the speedrun-style frame counter + button display over the game.
+- 🎲 **Randomizer Hooks**: Apply any community IPS randomizer patch via **File → Apply IPS Patch** (or `--ips`); the patched game runs from a temp file, no patched-ROM copies to manage. Mined RAM addresses can also be tweaked at boot via `[Randomize]` in config.
+- ✍️ **HD Text Replacement**: An ink-hash tile pack (`aw-hd-capture` builds the starter) swaps the 8×8 GBA font for 16×16 artist tiles at render time — crisp dialogue at any window size, palette-independent matching.
 - 🔊 **Full Audio Backend**: 16-bit stereo PCM audio synthesis via integrated mGBA core bridge and low-latency Windows `waveOut` audio pipeline.
 - 🖼️ **Software & Windowed Renderer**: High-performance pixel pipeline supporting standard GBA display modes, tile layers, and sprite rendering.
 - 🛠️ **Cross-Platform Toolchain**: Built with CMake & Ninja, supporting Clang, GCC, and MSVC.
@@ -41,10 +44,28 @@
 | **Undo Last Order** (one press = one order undone) | `Ctrl+Z` | Left stick click (`L3`) |
 | **Instant Rewind** (hold to step back ~1/3 s per step, release to resume) | `Backspace` (hold) | `Y` or `LT` (hold) |
 | **Fast-Forward** (hold for max-speed emulation, release for 1x) | `Tab` (hold) | `X` or `RT` (hold) |
+| **Record Replay** (starts from power-on) / finish | `F6` | — |
+| **Stop Replay Playback** | `F7` | — |
+| **Input Display + Frame Counter** | `F8` | — |
 
 - Rewind keeps an in-RAM savestate ring (up to **5 seconds** of history by default; no disk I/O, no savestate slots touched). Holding rewinds through your last moves, attacks, or combat animations; releasing resumes play from that point. Snapshots older than the window are evicted automatically, so you can never rewind further back than the limit.
 - Fast-forward mutes timeline audio while held (no pitch distortion, no drifting sync) and returns to clean 1x playback on release. Both modes show their state in the window title, and are also available from the **File** menu.
 - Tunable in `config.ini` under `[Rewind]`: `enabled`, `snapshot_interval` (frames between snapshots), `capacity` (ring size), `max_seconds` (rewind window, default 5).
+
+### 🎬 Replays
+
+- `F6` starts recording: the console power-cycles so the file replays from frame 0, then every fed input is logged (2 bytes per frame — about 430 KB per hour). The ROM's SHA-1 travels in the header, and playback refuses a mismatched revision instead of silently desyncing. Files contain no ROM data, so they're safe to share.
+- Play back with **File → Play Replay…** (or `--replay run.awr`); `Tab` fast-forwards a replay just like live play, and `F7` stops it. Loading savestates during playback is refused to protect the input stream.
+- `F8` toggles the on-game status strip: emulated frame counter plus every held GBA button (speedrun/capture friendly), with REC/PLAY markers while a replay is active.
+
+### 🎲 Randomizing
+
+- **File → Apply IPS Patch…** stages any IPS patch (the format community AW randomizers ship) and reboots with it applied; the choice persists in `config.ini` under `[Patches]`. The patched image lives in a temp file while playing — clear the setting and reboot to return to vanilla. `--ips patch.ips` does the same from the command line.
+- Mined RAM addresses can be written once at boot via `[Randomize]` (`apply_frame`, plus `write1 = address:value` decimal slots) — see `data/symbols/README.md` for the mining workflow.
+
+### ✍️ HD text packs
+
+- Run `aw-hd-capture "<rom>" [state.ss] --mash` to dump every distinct 8×8 framebuffer block as an identity-upscaled starter pack under `data/hd/tiles/`. Redraw any `_16.bmp` by hand (dark pixels = ink), enable **Settings → HD Text Replacement**, and exactly those glyphs render at 2x with the game's own palette. Matching is by ink shape, not colour, so one tile covers the glyph everywhere it appears.
 
 ---
 

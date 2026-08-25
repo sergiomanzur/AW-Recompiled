@@ -108,6 +108,13 @@ void aw_mgba_set_video_buffer(struct mCore* core, void* buffer, size_t stride) {
     core->setVideoBuffer(core, (mColor*)buffer, stride);
 }
 
+void aw_mgba_reset(struct mCore* core) {
+    if (!core) return;
+    if (core->reset) {
+        core->reset(core);
+    }
+}
+
 void aw_mgba_run_frame(struct mCore* core, uint16_t keys) {
     if (!core) return;
     if (core->setKeys) {

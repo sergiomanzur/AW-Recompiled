@@ -14,6 +14,11 @@ struct mCore* aw_mgba_create(const char* rom_path, void* video_buffer, size_t st
 void aw_mgba_set_video_buffer(struct mCore* core, void* buffer, size_t stride);
 void aw_mgba_run_frame(struct mCore* core, uint16_t keys);
 
+// Power-cycle reset: the core returns to frame 0 exactly as at creation.
+// Replay recording and playback both start from here so the input stream
+// alone reproduces the run.
+void aw_mgba_reset(struct mCore* core);
+
 // Reads up to `max_samples` stereo sample frames from the core's audio buffer
 // into `samples` (interleaved stereo int16). Returns the number of sample
 // frames actually read.
