@@ -36,3 +36,6 @@ Thumbs.db
 
 # Replay recordings (inputs only, safe to share, but runtime artifacts)
 *.awr
+
+# Battery saves written by gba-recomp play sessions
+*.sav

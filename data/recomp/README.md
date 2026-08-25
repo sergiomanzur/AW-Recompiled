@@ -23,9 +23,15 @@ game currently boots through.
 | 20,000-frame soak with `aw-soak-input.txt` | +8,424 ROM / +36 IWRAM entries (now 8,860 ROM + 113 IWRAM total) |
 | Differential verify, boot (600 frames) | `verify MATCH` — recomp == interpreter frame hash |
 | Differential verify, deep (20,000 frames, gameplay input) | `verify MATCH` |
+| Interactive play (`recomp play --stats --record-labels`) | **Playable.** Profiling boot found 9,500 RAM entry points; translation grew to **37,011 blocks / 3.6M instructions**. Booted BIOS-HLE, loaded the battery save, auto-detected the audio engine (M4A/MP2K, HLE shadow armed), and reached the mission map via injected keyboard input: menu navigation (Down/Enter) and dialogue advance (A-mash) both confirmed by pixel-diffed screen captures (~184k pixels changed per input round). Their frontend reported ~16.5 ms/frame on this laptop (at the 60 fps budget); the audio-ring backlog warning is a quirk of their cpal frontend — irrelevant to embedding, where our waveOut pipeline consumes their APU samples directly. Battery `.sav` load/save both work. |
 
 "Native %" figures mix units (native block entries vs interpreter steps)
 and vary by workload; the invariant that matters is `verify MATCH`.
+
+Note: the play path's profiling-boot seeds (the 8,557 extra ROM entries
+behind the 37k-block build) live in the per-user translation cache, not the
+portable labels file — a fresh `build`/`verify` uses the 8,860+113 entries
+exported here; `play` re-profiles on first launch automatically.
 
 ## Reproducing / growing coverage
 
