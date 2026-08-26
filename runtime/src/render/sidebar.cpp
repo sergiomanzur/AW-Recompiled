@@ -102,6 +102,11 @@ std::vector<std::pair<std::string, bool>> sidebar_panel_lines(const SidebarData&
   input += (data.live_keys & 0x08) ? "ST" : "--";
   lines.emplace_back(input, false);
 
+  if (data.cheat_count > 0) {
+    lines.emplace_back("CHEATS    " + std::to_string(data.cheat_count) + " code(s) active",
+                       false);
+  }
+
   if (data.forecast.valid) {
     lines.emplace_back("FORECAST", true);
     lines.emplace_back(std::string(data.forecast.attacker_name) + " vs " +

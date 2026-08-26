@@ -105,6 +105,7 @@ constexpr UINT IDM_SETTINGS_TOGGLE_HUD  = 3003;
 constexpr UINT IDM_SETTINGS_SIDEBAR     = 3004;
 constexpr UINT IDM_SETTINGS_INPUT_DISPLAY = 3005;
 constexpr UINT IDM_SETTINGS_HD_TEXT     = 3006;
+constexpr UINT IDM_SETTINGS_CHEATS    = 3007;
 constexpr UINT IDM_HELP_CONTROLS        = 4001;
 constexpr UINT IDM_HELP_ABOUT           = 4002;
 
@@ -412,6 +413,14 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
           std::cout << "HD Text Replacement: " << (win->hd_text_enabled() ? "ENABLED" : "DISABLED")
                     << std::endl;
         }
+      } else if (id == IDM_SETTINGS_CHEATS) {
+        if (win != nullptr) {
+          win->toggle_cheats();
+          ConfigFile config;
+          config.load("config.ini");
+          win->save_config(config);
+          std::cout << "Cheats: " << (win->cheats_enabled() ? "ENABLED" : "DISABLED") << std::endl;
+        }
       } else if (id == IDM_HELP_ABOUT) {
         MessageBoxA(hwnd,
           "AW-Recompiled v0.1 Alpha\n\n"
@@ -535,6 +544,7 @@ Window::Window(int width, int height, const char* title)
   AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_SIDEBAR, "Show Tactical &Sidebar (widescreen)\tF4");
   AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_INPUT_DISPLAY, "Show &Input Display + Frame Counter\tF8");
   AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_HD_TEXT, "HD &Text Replacement (needs pack)");
+  AppendMenuA(hSettingsMenu, MF_STRING, IDM_SETTINGS_CHEATS, "Enable &Cheats ([Cheats] in config.ini)");
 
   // Help Menu
   AppendMenuA(hHelpMenu, MF_STRING, IDM_HELP_CONTROLS, "&Controls Info...");
@@ -792,6 +802,7 @@ void Window::load_config(const ConfigFile& config) {
   const int sidebar = config.get_int("Display", "sidebar", 1);
   const int input_display = config.get_int("Replay", "input_display", 1);
   const int hd_text = config.get_int("Display", "hd_text", 0);
+  const int cheats = config.get_int("Cheats", "enabled", 0);
 
   set_aspect_ratio(static_cast<AspectRatio>(std::clamp(aspect, 0, 5)));
   set_internal_resolution(static_cast<InternalResolution>(std::clamp(res, 0, 3)));
@@ -800,6 +811,7 @@ void Window::load_config(const ConfigFile& config) {
   set_sidebar_enabled(sidebar != 0);
   set_input_display(input_display != 0);
   if (hd_text != 0) set_hd_text_enabled(true);
+  set_cheats_enabled(cheats != 0);
 
   input_mapping_.load_from_config(config);
 }
@@ -811,6 +823,7 @@ void Window::save_config(ConfigFile& config) const {
   config.set_int("Display", "show_hud", show_hud_ ? 1 : 0);
   config.set_int("Display", "sidebar", sidebar_enabled_ ? 1 : 0);
   config.set_int("Display", "hd_text", hd_text_enabled_ ? 1 : 0);
+  config.set_int("Cheats", "enabled", cheats_enabled_ ? 1 : 0);
   config.set_int("Replay", "input_display", input_display_ ? 1 : 0);
   if (!pending_rom_path_.empty()) {
     config.set_string("Paths", "rom_path", pending_rom_path_);
@@ -857,6 +870,7 @@ void Window::update_menu_checks() {
   CheckMenuItem(hMenuBar, IDM_SETTINGS_SIDEBAR, sidebar_enabled_ ? MF_CHECKED : MF_UNCHECKED);
   CheckMenuItem(hMenuBar, IDM_SETTINGS_INPUT_DISPLAY, input_display_ ? MF_CHECKED : MF_UNCHECKED);
   CheckMenuItem(hMenuBar, IDM_SETTINGS_HD_TEXT, hd_text_enabled_ ? MF_CHECKED : MF_UNCHECKED);
+  CheckMenuItem(hMenuBar, IDM_SETTINGS_CHEATS, cheats_enabled_ ? MF_CHECKED : MF_UNCHECKED);
   CheckMenuItem(hMenuBar, IDM_FILE_REPLAY_RECORD, recording_ui_ ? MF_CHECKED : MF_UNCHECKED);
   CheckMenuItem(hMenuBar, IDM_FILE_FASTFORWARD, fast_forward_latch_ ? MF_CHECKED : MF_UNCHECKED);
 }
@@ -1106,6 +1120,11 @@ void Window::set_input_display(bool on) {
   }
 }
 
+void Window::set_cheats_enabled(bool enabled) {
+  cheats_enabled_ = enabled;
+  update_menu_checks();
+}
+
 void Window::set_hd_text_enabled(bool enabled) {
   hd_text_enabled_ = enabled;
   if (enabled && !hd_text_pack_loaded_) {
@@ -1256,6 +1275,24 @@ void Window::render(const Ppu& ppu, const SidebarData& sidebar_data) {
   int src_w = ppu.width;
   int src_h = ppu.height;
 
+  // Internal Resolution: integer nearest pre-scale. The k>1 path replaces
+  // the 2x filters (their input must stay 1x pixel art).
+  const int internal_k = [this]() {
+    switch (internal_resolution_) {
+      case InternalResolution::Res_720p:  return 4;   // 960x640
+      case InternalResolution::Res_1080p: return 6;   // 1440x960
+      case InternalResolution::Res_4K:    return 9;   // 2160x1440
+      default:                            return 1;
+    }
+  }();
+  if (internal_k > 1 && video_filter_ == VideoFilter::NearestNeighbor) {
+    scale2x_buffer_.resize((src_w * internal_k) * (src_h * internal_k));
+    apply_nearest_k(ppu.framebuffer.data(), scale2x_buffer_.data(), src_w, src_h, internal_k);
+    render_data = scale2x_buffer_.data();
+    src_w *= internal_k;
+    src_h *= internal_k;
+  }
+
   // HD text: upscale 2x, then let the pack overwrite matched glyph blocks
   // with 16x16 replacements. Works on top of any base filter.
   if (hd_text_enabled_ && hd_pack_.loaded()) {
@@ -1364,6 +1401,7 @@ std::string Window::consume_pending_replay() { return ""; }
 void Window::set_recording_ui(bool /*recording*/) {}
 void Window::set_input_display(bool /*on*/) {}
 void Window::set_hd_text_enabled(bool /*enabled*/) {}
+void Window::set_cheats_enabled(bool /*enabled*/) {}
 void Window::set_playback_indicator(int /*indicator*/) {}
 void Window::draw_sidebar_panel(void* /*hdc*/, const SidebarData& /*data*/,
                                 const SidebarLayout& /*layout*/) {}
@@ -1376,5 +1414,22 @@ std::string Window::open_patch_dialog(void* /*parent_hwnd*/) { return ""; }
 void Window::update_menu_checks() {}
 
 #endif
+
+
+void apply_nearest_k(const std::uint32_t* src, std::uint32_t* dst, int w, int h, int k) {
+  if (src == nullptr || dst == nullptr || w <= 0 || h <= 0 || k < 1) return;
+  const int out_w = w * k;
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      const std::uint32_t px = src[static_cast<std::size_t>(y) * w + x];
+      std::uint32_t* row = &dst[static_cast<std::size_t>(y * k) * out_w + x * k];
+      for (int dy = 0; dy < k; ++dy) {
+        for (int dx = 0; dx < k; ++dx) {
+          row[static_cast<std::size_t>(dy) * out_w + dx] = px;
+        }
+      }
+    }
+  }
+}
 
 }  // namespace aw

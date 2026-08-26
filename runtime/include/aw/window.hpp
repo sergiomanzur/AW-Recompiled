@@ -112,6 +112,12 @@ public:
   void set_input_display(bool on);
   void toggle_input_display() { set_input_display(!input_display_); }
 
+  // RAM-write cheats ([Cheats] in config.ini): the toggle is UI state,
+  // the codes and the per-frame writes live in the game loop.
+  bool cheats_enabled() const { return cheats_enabled_; }
+  void set_cheats_enabled(bool enabled);
+  void toggle_cheats() { set_cheats_enabled(!cheats_enabled_); }
+
   // HD text/UI replacement (see aw/render/hd_text.hpp). Enabling lazily
   // loads data/hd/tiles/tiles.ini; with no pack the game renders unchanged.
   bool hd_text_enabled() const { return hd_text_enabled_; }
@@ -151,6 +157,7 @@ private:
   bool sidebar_enabled_ = true;
   bool input_display_ = true;
   bool hd_text_enabled_ = false;
+  bool cheats_enabled_ = false;
   bool hd_text_pack_loaded_ = false;
   HdTextPack hd_pack_;
   bool f2_key_was_down_ = false;

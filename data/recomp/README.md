@@ -75,3 +75,57 @@ it contains game bytes).
    the memory-pointer seam.
 4. **Differential-soak both cores** (mGBA vs recomp) using this repo's
    `--replay` files as shared input scripts before flipping the default.
+
+## Embedded backend (this repository)
+
+The runtime can execute the recompiled game directly — every feature
+(rewind, undo, replays, sidebar, cheats, probes) runs unchanged:
+
+- `recomp-host/` — a Rust cdylib (`aw_recomp_host.dll`) that loads the
+  recompiled game DLL (`rcg_blocks`) and drives it with the upstream
+  dispatch loop (translated blocks + interpreter fallback + IRQ at block
+  boundaries + audio-engine hooks). Exposes the aw_mgba_* contract over a
+  C ABI, including **savestates as slimmed Machine clones (~530 KB)** and
+  **in-place restores that keep allocation addresses stable** so cached
+  memory pointers survive — the same property the mGBA backend had.
+- `runtime/src/recomp_adapter.c` — compiled instead of `mgba_adapter.c`
+  when CMake `AW_BACKEND=recomp`; binds the host DLL at runtime
+  (LoadLibrary; `AW_RECOMP_HOST` overrides the path, `AW_RECOMP_LIB` pins
+  the game DLL, otherwise `../gba-recomp/out/<stem>.dll`).
+
+### Required local patches to the gba-recomp checkout
+
+The sibling checkout needs the `Clone` derives and the in-place
+`restore_from` added to `gba-core` (savestate support). They are small and
+mechanical; until upstream ships an equivalent, re-apply after pulling:
+
+- `crates/gba-core/src/{mem,machine,cpu,backup,rtc,apu,mp2k,gax,rdrv,shadow}.rs`:
+  `#[derive(Clone)]` (or manual `impl Clone`) on the state structs;
+  `Machine::clone` resets the decode cache (memoization).
+- `MemMap::restore_from(&other)`: field-wise restore that clears+extends
+  existing Vecs (allocation reuse) instead of replacing them.
+- `Machine::restore_from(&other)`: `cpu.clone()` + `bus.restore_from`.
+
+### Building and running the recomp backend
+
+```sh
+# 1. Build the game DLL once (see the coverage loop above).
+cd ../gba-recomp && ./target/release/recomp build <rom>
+
+# 2. Build the host shim.
+cd ../advance-wars-recomp/recomp-host
+cargo build --release        # RUSTFLAGS="-C linker=lld-link" on Windows without MSVC
+
+# 3. Build and run the runtime on native code.
+cd ..
+cmake -S . -B build/recomp -G Ninja -DAW_BACKEND=recomp
+cmake --build build/recomp --target advance-wars-native
+cp recomp-host/target/release/aw_recomp_host.dll build/recomp/runtime/
+./build/recomp/runtime/advance-wars-native <rom>
+```
+
+Verified on the recomp backend: full ctest suite (rewind smoke restores
+2/2 snapshots), 65,536 Hz stereo audio, correct pixel channel order and
+input response verified by window capture, interactive play to the menu.
+File-format savestates (F5/F9) are not yet implemented on this backend —
+memory snapshots (rewind/undo) are; the mGBA backend keeps file states.

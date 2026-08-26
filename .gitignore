@@ -39,3 +39,6 @@ Thumbs.db
 
 # Battery saves written by gba-recomp play sessions
 *.sav
+
+# Rust build output for the recomp host shim
+recomp-host/target/

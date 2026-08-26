@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace aw {
 
 // Window geometry shared by the window layer and the sidebar. Kept in its
@@ -23,5 +25,11 @@ struct ViewportRect {
 
 // Pure calculation function for letterbox/pillarbox viewport geometry
 ViewportRect calculate_viewport_rect(int client_width, int client_height, AspectRatio ratio);
+
+// Nearest-neighbour integer pre-scale of a framebuffer by factor k
+// (k >= 1). The Internal Resolution setting runs the game image through
+// this before the window stretch, trading a bigger blit for crisper
+// downscale behaviour at large window sizes.
+void apply_nearest_k(const std::uint32_t* src, std::uint32_t* dst, int w, int h, int k);
 
 }  // namespace aw

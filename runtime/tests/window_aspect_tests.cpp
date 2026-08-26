@@ -3,6 +3,25 @@
 #include <iostream>
 
 int main() {
+  // Nearest-k pre-scale: each source pixel becomes a k*k block.
+  {
+    std::uint32_t src[2] = {0xFFAA0044u, 0xFF112233u};
+    std::uint32_t dst[8] = {};
+    aw::apply_nearest_k(src, dst, 2, 1, 2);
+    assert(dst[0] == 0xFFAA0044u && dst[1] == 0xFFAA0044u);
+    assert(dst[2] == 0xFF112233u && dst[3] == 0xFF112233u);
+    assert(dst[4] == 0xFFAA0044u && dst[5] == 0xFFAA0044u);
+    assert(dst[6] == 0xFF112233u && dst[7] == 0xFF112233u);
+
+    std::uint32_t one[2] = {};
+    aw::apply_nearest_k(src, one, 2, 1, 1);
+    assert(one[0] == src[0] && one[1] == src[1]);
+
+    aw::apply_nearest_k(nullptr, one, 2, 1, 1);
+    aw::apply_nearest_k(src, nullptr, 2, 1, 1);
+    aw::apply_nearest_k(src, one, 2, 1, 0);
+  }
+
   std::cout << "Running window aspect ratio tests...\n";
 
   // Test 1: Stretch mode always fills client rect

@@ -1,0 +1,14 @@
+[package]
+name = "aw_recomp_host"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+# Path dependency on the sibling gba-recomp checkout (see
+# data/recomp/README.md for the toolchain layout). The checkout carries a
+# local patch adding Clone to the machine state (savestate support).
+[dependencies]
+gba-core = { path = "../../gba-recomp/crates/gba-core" }
+libloading = "0.8"

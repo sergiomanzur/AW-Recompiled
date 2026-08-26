@@ -1,5 +1,16 @@
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+# Execution backend: "mgba" (default, interpreter-core bridge) or "recomp"
+# (gba-recomp static recompilation; see data/recomp/README.md). Both
+# implement the identical aw_mgba_* contract, so everything above the
+# adapter is backend-agnostic.
+set(AW_BACKEND "mgba" CACHE STRING "Execution backend: mgba or recomp")
+set(AW_BACKEND_OPTIONS "mgba;recomp")
+set_property(CACHE AW_BACKEND PROPERTY STRINGS ${AW_BACKEND_OPTIONS})
+if(NOT AW_BACKEND IN_LIST AW_BACKEND_OPTIONS)
+  message(FATAL_ERROR "AW_BACKEND must be one of ${AW_BACKEND_OPTIONS}")
+endif()
+
 set(AW_TEST_ROM_PATH "${PROJECT_SOURCE_DIR}/rom/Advance Wars (USA) (Rev 1).gba")
 set(AW_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 set(AW_GENERATED_HEADER ${AW_GENERATED_DIR}/aw/generated_blocks.hpp)
@@ -18,9 +29,16 @@ add_custom_command(
   VERBATIM
 )
 
+if(AW_BACKEND STREQUAL "recomp")
+  set(AW_ADAPTER_SRC src/recomp_adapter.c)
+else()
+  set(AW_ADAPTER_SRC src/mgba_adapter.c)
+endif()
+
 add_library(aw_runtime STATIC
   src/arm_decode.cpp
   src/audio.cpp
+  src/cheats.cpp
   src/config_file.cpp
   src/cpu_interpreter.cpp
   src/cpu_state.cpp
@@ -50,14 +68,20 @@ add_library(aw_runtime STATIC
   src/rom.cpp
   src/tactical_intel.cpp
   src/window.cpp
-  src/mgba_adapter.c
+  ${AW_ADAPTER_SRC}
   ${AW_GENERATED_SOURCE}
 )
 
 if (WIN32)
-  target_link_libraries(aw_runtime PUBLIC winmm xinput mgba)
+  if(AW_BACKEND STREQUAL "recomp")
+    target_link_libraries(aw_runtime PUBLIC winmm xinput)
+  else()
+    target_link_libraries(aw_runtime PUBLIC winmm xinput mgba)
+  endif()
 else()
-  target_link_libraries(aw_runtime PUBLIC mgba)
+  if(NOT AW_BACKEND STREQUAL "recomp")
+    target_link_libraries(aw_runtime PUBLIC mgba)
+  endif()
 endif()
 
 target_compile_definitions(aw_runtime PUBLIC
@@ -73,6 +97,9 @@ target_compile_definitions(aw_runtime PUBLIC
   M_CORE_GBA
   USE_LZMA
 )
+if(AW_BACKEND STREQUAL "recomp")
+  target_compile_definitions(aw_runtime PUBLIC AW_BACKEND_RECOMP)
+endif()
 
 target_include_directories(aw_runtime PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -392,6 +419,19 @@ target_link_libraries(hd_text_tests PRIVATE aw_runtime)
 
 add_test(NAME hd_text_tests COMMAND hd_text_tests)
 
+add_executable(cheats_tests
+  tests/cheats_tests.cpp
+)
+
+target_include_directories(cheats_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_BINARY_DIR}/generated
+)
+
+target_link_libraries(cheats_tests PRIVATE aw_runtime)
+
+add_test(NAME cheats_tests COMMAND cheats_tests)
+
 add_executable(advance-wars-native
   src/main.cpp
 )
@@ -407,6 +447,7 @@ add_test(
   COMMAND advance-wars-native "${AW_TEST_ROM_PATH}" --frames 120
 )
 set_tests_properties(advance_wars_native_smoke PROPERTIES
+  WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
   TIMEOUT 120
   PASS_REGULAR_EXPRESSION "Ran 120 frames; audio samples emitted: [1-9][0-9]*"
 )
@@ -424,6 +465,7 @@ add_test(
   COMMAND advance-wars-native --frames 60
 )
 set_tests_properties(advance_wars_native_double_click_smoke PROPERTIES
+  WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
   ENVIRONMENT "AW_NATIVE_NO_PAUSE=1"
   TIMEOUT 120
   PASS_REGULAR_EXPRESSION "ROM: ADVANCEWARS AWRE01 Rev 1"
@@ -434,6 +476,7 @@ add_test(
   COMMAND advance-wars-native "${AW_TEST_ROM_PATH}" --frames 200 --rewind-smoke
 )
 set_tests_properties(advance_wars_native_rewind_smoke PROPERTIES
+  WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
   ENVIRONMENT "AW_NATIVE_NO_PAUSE=1"
   TIMEOUT 120
   PASS_REGULAR_EXPRESSION "rewind smoke: restored 2/2 snapshots"

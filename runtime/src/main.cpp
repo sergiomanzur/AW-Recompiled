@@ -1,6 +1,7 @@
 #include "aw/arm_decode.hpp"
 #include "aw/audio.hpp"
 #include "aw/config.hpp"
+#include "aw/cheats.hpp"
 #include "aw/config_file.hpp"
 #include "aw/cpu_interpreter.hpp"
 #include "aw/cpu_state.hpp"
@@ -303,6 +304,14 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
     // game-state read this project has.
     aw::MapSensor map_sensor;
 
+    // RAM-write cheats: parsed from [Cheats], applied every frame while
+    // enabled so the game's own writes cannot win.
+    aw::CheatEngine cheats;
+    cheats.load(config);
+    if (cheats.enabled() && !cheats.codes().empty()) {
+      std::cout << "Cheats: " << cheats.codes().size() << " code(s) armed" << std::endl;
+    }
+
     // Replays: record the exact keys_pressed stream from power-on (F6), and
     // play it back (File > Play Replay). The core is deterministic, so the
     // stream alone reproduces the run; the ROM sha1 travels in the header so
@@ -455,6 +464,7 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       if (!window.process_events(hardware)) {
         break;
       }
+      cheats.set_enabled(window.cheats_enabled());
 
       // --- Replay control (F6 record toggle, F7 stop, File > Play).
       if (window.consume_record_toggle()) {
@@ -655,6 +665,19 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
 
           if (replay_recorder.active()) replay_recorder.record(hardware.keys_pressed);
           aw_mgba_run_frame(core, hardware.keys_pressed);
+          if (cheats.active_count() > 0) {
+            for (const aw::CheatCode& c : cheats.codes()) {
+              if (c.width == 1) {
+                aw_mgba_write8(core, c.address, static_cast<std::uint8_t>(c.value));
+              } else if (c.width == 2) {
+                aw_mgba_write16(core, c.address, static_cast<std::uint16_t>(c.value));
+              } else {
+                aw_mgba_write16(core, c.address, static_cast<std::uint16_t>(c.value));
+                aw_mgba_write16(core, c.address + 2,
+                                static_cast<std::uint16_t>(c.value >> 16));
+              }
+            }
+          }
           frames_run++;
           rewind_buffer.on_frame();
           map_sensor.on_frame(hardware.keys_pressed,
@@ -741,6 +764,7 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
                                             : replay_recorder.frames();
       sidebar.replay_total = replay_player.info().frame_count;
       sidebar.live_keys = hardware.keys_pressed;
+      sidebar.cheat_count = cheats.active_count();
       sidebar.forecast = intel.forecast();
       window.render(ppu, sidebar);
 
@@ -814,6 +838,16 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
   // High-precision multimedia timer (1 ms accuracy for smooth frame pacing)
   timeBeginPeriod(1);
+#endif
+  // The runtime prints little; unbuffered stdout keeps diagnostics alive
+  // past hard crashes (savestate bring-up debugging depends on it).
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
+
+#ifdef AW_BACKEND_RECOMP
+  std::cout << "AW-Recompiled backend: RECOMP (native static recompilation)"
+            << std::endl;
+#else
+  std::cout << "AW-Recompiled backend: MGBA (core bridge)" << std::endl;
 #endif
 
   int exit_code = 0;

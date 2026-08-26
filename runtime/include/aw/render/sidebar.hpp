@@ -41,6 +41,7 @@ struct SidebarData {
   std::uint32_t replay_frame = 0;
   std::uint32_t replay_total = 0;
   std::uint16_t live_keys = 0;
+  int cheat_count = 0;
 
   // Combat forecast; valid only when real attacker/defender data exists.
   DamageForecast forecast{};

@@ -10,7 +10,7 @@
 
 ## ✨ Features (v0.1 Alpha)
 
-- 🎮 **Fully Playable Native Engine**: Native executable rendering at 60 FPS with hardware input mapping.
+- 🎮 **Fully Playable Native Engine**: Native executable rendering at 60 FPS with hardware input mapping — and now selectable between two execution backends: the mGBA core bridge (default) and the **gba-recomp static recompilation backend** (`AW_BACKEND=recomp`), where the game's own code runs as a native DLL and the full feature surface works unchanged.
 - ↩️ **Undo Last Order**: `Ctrl+Z` (or left-stick click) instantly restores the exact moment before your last confirmed move or attack — snapshots are taken at the confirming button press while you are commanding the map.
 - 📊 **Tactical Sidebar**: In widescreen aspect ratios the game keeps its pixel-perfect 3:2 frame while a native console panel fills the extra space — playback mode, cursor tile, undo/rewind depth, and emulation telemetry (`F4` to toggle). Only verified game-state reads are shown; nothing is invented.
 - ⏪ **Instant Turn Rewind (Time Travel)**: Hold `Backspace` to rewind through an in-RAM savestate ring (5-second window by default) — no savestate files, no reloads.
@@ -18,6 +18,8 @@
 - 🎬 **Replays + Input Display**: `F6` records a run from power-on to a tiny shareable `.awr` file (inputs only — no ROM data); play them back via **File → Play Replay**, even fast-forwarded. `F8` toggles the speedrun-style frame counter + button display over the game.
 - 🎲 **Randomizer Hooks**: Apply any community IPS randomizer patch via **File → Apply IPS Patch** (or `--ips`); the patched game runs from a temp file, no patched-ROM copies to manage. Mined RAM addresses can also be tweaked at boot via `[Randomize]` in config.
 - ✍️ **HD Text Replacement**: An ink-hash tile pack (`aw-hd-capture` builds the starter) swaps the 8×8 GBA font for 16×16 artist tiles at render time — crisp dialogue at any window size, palette-independent matching.
+- 🧪 **Cheats**: RAM-write codes (`[Cheats]` in `config.ini`, `address:width:value` decimal or hex) applied every frame so the game can't fight them off; toggle live from the Settings menu, active count shown in the sidebar.
+- 🖥️ **Internal Resolution Pre-Scaling**: the Internal Resolution setting now genuinely pre-scales the framebuffer (4×/6×/9× for 720p/1080p/4K) with nearest-neighbour before the window stretch.
 - 🔊 **Full Audio Backend**: 16-bit stereo PCM audio synthesis via integrated mGBA core bridge and low-latency Windows `waveOut` audio pipeline.
 - 🖼️ **Software & Windowed Renderer**: High-performance pixel pipeline supporting standard GBA display modes, tile layers, and sprite rendering.
 - 🛠️ **Cross-Platform Toolchain**: Built with CMake & Ninja, supporting Clang, GCC, and MSVC.
