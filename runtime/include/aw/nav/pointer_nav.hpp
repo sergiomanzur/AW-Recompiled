@@ -9,21 +9,12 @@ namespace aw {
 struct NavConfig {
   // Frames of unanswered pressing before an axis is declared blocked.
   int blocked_frames = 8;
-  // Fallback "arrived" error, in screen pixels, used only until an axis has
-  // observed a real step size on the current screen (see Axis::observed_step
-  // in PointerNav). Half a 16 px tile -- right for the common 16 px map grid,
-  // wrong (a full cell) for smaller grids such as the name-entry letter
-  // screen, which is exactly why the observed step size overrides it once
-  // available.
+  // Fallback "arrived" error, in screen pixels.
   int snap_radius = 8;
   // Frames to release between steps. The game needs a gap to register a
   // second discrete move.
   int release_frames = 1;
-  // While armed and steerable but with no indicator locked yet, PointerNav
-  // emits a single one-frame exploratory D-pad pulse every this many frames
-  // (and nothing on the frames between) so a mouse-only player still
-  // generates the motion OamTracker's correlation needs for a first lock.
-  // Unused once an indicator is found.
+  // Exploratory D-pad pulse interval during correlation lock acquisition.
   int probe_interval_frames = 10;
 };
 

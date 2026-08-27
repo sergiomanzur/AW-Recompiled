@@ -57,4 +57,45 @@ void draw_pointer(std::uint32_t* framebuffer, int width, int height, int x, int 
   }
 }
 
+void draw_rts_tile_reticle(std::uint32_t* framebuffer, int width, int height,
+                           int tile_x, int tile_y, int scroll_x, int scroll_y,
+                           std::uint32_t color) {
+  if (framebuffer == nullptr || width <= 0 || height <= 0) return;
+
+  const int sx = tile_x * 16 - scroll_x;
+  const int sy = tile_y * 16 - scroll_y;
+  constexpr int kTileSize = 16;
+  constexpr int kArmLen = 4;
+
+  if (sx + kTileSize <= 0 || sx >= width || sy + kTileSize <= 0 || sy >= height) return;
+
+  auto put_pixel = [&](int px, int py, std::uint32_t c) {
+    if (px >= 0 && px < width && py >= 0 && py < height) {
+      framebuffer[static_cast<std::size_t>(py) * static_cast<std::size_t>(width) +
+                  static_cast<std::size_t>(px)] = c;
+    }
+  };
+
+  // Top-left corner
+  for (int i = 0; i < kArmLen; ++i) {
+    put_pixel(sx + i, sy, color);
+    put_pixel(sx, sy + i, color);
+  }
+  // Top-right corner
+  for (int i = 0; i < kArmLen; ++i) {
+    put_pixel(sx + kTileSize - 1 - i, sy, color);
+    put_pixel(sx + kTileSize - 1, sy + i, color);
+  }
+  // Bottom-left corner
+  for (int i = 0; i < kArmLen; ++i) {
+    put_pixel(sx + i, sy + kTileSize - 1, color);
+    put_pixel(sx, sy + kTileSize - 1 - i, color);
+  }
+  // Bottom-right corner
+  for (int i = 0; i < kArmLen; ++i) {
+    put_pixel(sx + kTileSize - 1 - i, sy + kTileSize - 1, color);
+    put_pixel(sx + kTileSize - 1, sy + kTileSize - 1 - i, color);
+  }
+}
+
 }  // namespace aw

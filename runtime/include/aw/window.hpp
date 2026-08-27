@@ -34,6 +34,12 @@ public:
 
   bool process_events(Hardware& hardware);
   void render(const Ppu& ppu, const SidebarData& sidebar);
+  // Blocks until the compositor has taken the frame render() presented.
+  // Separate from render() so the wait is not counted as frame work.
+  // Returns true when the wait actually paced the frame, so the caller can
+  // skip its own pacing; false when vsync is off or the compositor did not
+  // block (DWM disabled, window minimised) and CPU pacing must take over.
+  bool present_wait();
   bool is_open() const { return is_open_; }
 
   void set_aspect_ratio(AspectRatio ratio);
@@ -49,6 +55,15 @@ public:
 
   void set_video_filter(VideoFilter filter);
   VideoFilter video_filter() const { return video_filter_; }
+
+  // Align presentation with the desktop compositor's refresh.
+  void set_vsync(bool on) { vsync_ = on; }
+  bool vsync() const { return vsync_; }
+
+  // Refresh rate of the display holding the window, in Hz. 0 when unknown.
+  // Presenting on the compositor's clock means the emulator advances at this
+  // rate rather than the GBA's, which the audio rate has to follow.
+  double display_refresh_hz() const;
 
   bool show_hud() const { return show_hud_; }
   void set_show_hud(bool show);
@@ -143,6 +158,10 @@ public:
 private:
   void update_menu_checks();
   void draw_sidebar_panel(void* hdc, const SidebarData& data, const SidebarLayout& layout);
+  // Ensures the offscreen composition buffer matches the client size.
+  // Returns false when the buffer is unavailable (render falls back to
+  // drawing straight to the window).
+  bool ensure_back_buffer(int width, int height);
 
   void* hwnd_ = nullptr;
   void* hdc_ = nullptr;
@@ -155,7 +174,7 @@ private:
   VideoFilter video_filter_ = VideoFilter::NearestNeighbor;
   bool show_hud_ = true;
   bool sidebar_enabled_ = true;
-  bool input_display_ = true;
+  bool input_display_ = false;
   bool hd_text_enabled_ = false;
   bool cheats_enabled_ = false;
   bool hd_text_pack_loaded_ = false;
@@ -198,6 +217,34 @@ private:
   AspectRatio last_aspect_ratio_ = AspectRatio::Original_3_2;
   bool last_sidebar_enabled_ = true;
   ViewportRect cached_viewport_{};
+
+  // Offscreen composition buffer. Every frame is assembled here (letterbox,
+  // game, sidebar) and presented with one BitBlt, so the compositor can never
+  // sample a half-drawn frame. Drawing straight to the window DC is what made
+  // text/message boxes flicker.
+  void* back_dc_ = nullptr;
+  void* back_bm_ = nullptr;
+  void* back_bm_old_ = nullptr;
+  int back_w_ = 0;
+  int back_h_ = 0;
+  bool back_needs_clear_ = true;
+
+  // Present alignment: block until the desktop compositor has picked up the
+  // last frame, so presentation cadence stops drifting against the refresh.
+  bool vsync_ = true;
+
+  // Cached GDI sidebar backbuffer & drawing resources
+  void* sidebar_dc_ = nullptr;
+  void* sidebar_bm_ = nullptr;
+  void* sidebar_bm_old_ = nullptr;
+  int sidebar_w_ = 0;
+  int sidebar_h_ = 0;
+  void* body_font_ = nullptr;
+  void* head_font_ = nullptr;
+  void* sidebar_bg_brush_ = nullptr;
+  void* sidebar_accent_brush_ = nullptr;
+  void* sidebar_rule_brush_ = nullptr;
+  void* black_brush_ = nullptr;
 };
 
 }  // namespace aw

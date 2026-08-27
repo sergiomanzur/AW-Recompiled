@@ -73,16 +73,8 @@ private:
                                              // starts reversing doesn't get reported
                                              // forever.
   static constexpr int kMinStepPixels = 4;  // Smaller motion is animation creep
-                                             // (scrolling text, unit idle
-                                             // animations), not a cursor step
   static constexpr int kMaxStepPixels = 32; // Larger jumps are not cursor steps
   static constexpr int kUnlockFrames = 60;  // Frames absent before re-locking
-  // Failure budget for verify_lock(). A wrong-direction move is unambiguous
-  // evidence this isn't the cursor -- the game never runs a selector
-  // backwards on unmodified input -- so it costs double. Sitting motionless
-  // is exactly what a *real* cursor does while the game is busy with an
-  // animation, so it costs a single point and must be forgiven far more
-  // slowly than an outright wrong turn.
   static constexpr int kVerifyFailBudget = 12;
   static constexpr std::size_t kMaxCandidates = 32;
 

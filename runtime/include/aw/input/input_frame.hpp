@@ -37,8 +37,13 @@ struct PointerState {
   bool moved = false;           // Position changed since the previous poll
   bool primary_down = false;    // Left button, or touch contact
   bool secondary_down = false;  // Right button, or two-finger contact
+  bool middle_down = false;     // Middle button, or 3-finger drag / pan
   bool primary_edge = false;    // primary_down went false -> true this poll
   bool secondary_edge = false;  // secondary_down went false -> true this poll
+  bool middle_edge = false;     // middle_down went false -> true this poll
+  bool double_click = false;    // Double click or quick double tap
+  int drag_dx = 0;              // Drag delta X in GBA pixels
+  int drag_dy = 0;              // Drag delta Y in GBA pixels
 };
 
 constexpr std::size_t kMaxPointers = 4;

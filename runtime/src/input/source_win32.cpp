@@ -44,10 +44,22 @@ void Win32InputSource::poll(InputFrame& frame) {
   // 2. XInput gamepad. Covers Xbox pads, Retroid handhelds and anything else
   //    exposing the XInput interface.
   const int ctrl_idx = mapping_->controller_index;
-  if (ctrl_idx >= 0 && ctrl_idx < 4) {
+  // An absent pad is only re-probed once a second: XInputGetState on an empty
+  // slot re-enumerates devices, costing ~0.3 ms on average and spiking past
+  // 3 ms, which is a real slice of a 16.7 ms frame for a device that is not
+  // there. Once a pad answers, it is polled every frame again.
+  const std::uint64_t now_ticks = static_cast<std::uint64_t>(GetTickCount64());
+  const bool probe_pad = pad_connected_ || now_ticks >= next_pad_probe_ms_;
+
+  if (ctrl_idx >= 0 && ctrl_idx < 4 && probe_pad) {
     XINPUT_STATE xstate;
     std::memset(&xstate, 0, sizeof(XINPUT_STATE));
-    if (XInputGetState(static_cast<DWORD>(ctrl_idx), &xstate) == ERROR_SUCCESS) {
+    const DWORD pad_result = XInputGetState(static_cast<DWORD>(ctrl_idx), &xstate);
+    pad_connected_ = (pad_result == ERROR_SUCCESS);
+    if (!pad_connected_) {
+      next_pad_probe_ms_ = now_ticks + 1000;
+    }
+    if (pad_connected_) {
       const WORD btns = xstate.Gamepad.wButtons;
       for (int i = 0; i < Gba_Count; ++i) {
         const std::uint16_t pad_mask = mapping_->bindings[i].pad_button;
@@ -104,14 +116,42 @@ void Win32InputSource::poll(InputFrame& frame) {
 
   const bool primary = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
   const bool secondary = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+  const bool middle = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
+
   p.primary_down = primary;
   p.secondary_down = secondary;
+  p.middle_down = middle;
+
   // Edges are tracked even outside the viewport so a press that starts on the
   // menu bar cannot leave a stuck button.
   p.primary_edge = primary && !last_primary_ && p.in_viewport;
   p.secondary_edge = secondary && !last_secondary_ && p.in_viewport;
+  p.middle_edge = middle && !last_middle_ && p.in_viewport;
+
+  // Double click detection (within 350ms and 4 GBA pixels)
+  const auto now_ms = static_cast<std::uint64_t>(GetTickCount64());
+  if (p.primary_edge) {
+    if (now_ms - last_click_time_ms_ < 350 &&
+        std::abs(gba_x - last_click_x_) <= 4 &&
+        std::abs(gba_y - last_click_y_) <= 4) {
+      p.double_click = true;
+      last_click_time_ms_ = 0;
+    } else {
+      last_click_time_ms_ = now_ms;
+      last_click_x_ = gba_x;
+      last_click_y_ = gba_y;
+    }
+  }
+
+  // Drag deltas while holding middle or right or touch
+  if ((middle || secondary || primary) && has_last_pos_) {
+    p.drag_dx = gba_x - last_gba_x_;
+    p.drag_dy = gba_y - last_gba_y_;
+  }
+
   last_primary_ = primary;
   last_secondary_ = secondary;
+  last_middle_ = middle;
 
   ++frame.pointer_count;
 }

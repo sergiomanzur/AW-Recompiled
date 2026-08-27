@@ -1,9 +1,28 @@
 #include "aw/hd_audio.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace aw {
+
+namespace {
+
+static std::array<std::int16_t, 65536> init_audio_lut() {
+  std::array<std::int16_t, 65536> lut{};
+  for (int i = 0; i < 65536; ++i) {
+    const std::int16_t raw = static_cast<std::int16_t>(static_cast<std::uint16_t>(i));
+    const double norm = static_cast<double>(raw) / 32768.0;
+    const double hd = std::tanh(norm * 1.15);
+    lut[static_cast<std::size_t>(i)] =
+        static_cast<std::int16_t>(std::clamp(hd * 32767.0, -32768.0, 32767.0));
+  }
+  return lut;
+}
+
+static const std::array<std::int16_t, 65536> kAudioLut = init_audio_lut();
+
+}  // namespace
 
 void HdAudioEngine::update(ProbeBackend& backend) {
   if (!backend.available()) return;
@@ -20,21 +39,12 @@ void HdAudioEngine::update(ProbeBackend& backend) {
 void HdAudioEngine::mix_audio(std::int16_t* samples, std::size_t sample_frames) {
   if (!enabled_ || samples == nullptr || sample_frames == 0) return;
 
-  // Perform subtle HD harmonic enhancement / stereo widening over the GBA audio stream
+  // Fast constant-time lookup table enhancement (zero floating point overhead)
   for (std::size_t i = 0; i < sample_frames; ++i) {
-    std::int16_t& left = samples[i * 2];
-    std::int16_t& right = samples[i * 2 + 1];
-
-    // HD Sub-bass & Clarity Enhancement
-    const double l_norm = static_cast<double>(left) / 32768.0;
-    const double r_norm = static_cast<double>(right) / 32768.0;
-
-    // Harmonic warmth curve
-    const double l_hd = std::tanh(l_norm * 1.15);
-    const double r_hd = std::tanh(r_norm * 1.15);
-
-    left = static_cast<std::int16_t>(std::clamp(l_hd * 32767.0, -32768.0, 32767.0));
-    right = static_cast<std::int16_t>(std::clamp(r_hd * 32767.0, -32768.0, 32767.0));
+    const auto u_left = static_cast<std::uint16_t>(samples[i * 2]);
+    const auto u_right = static_cast<std::uint16_t>(samples[i * 2 + 1]);
+    samples[i * 2] = kAudioLut[u_left];
+    samples[i * 2 + 1] = kAudioLut[u_right];
   }
 }
 

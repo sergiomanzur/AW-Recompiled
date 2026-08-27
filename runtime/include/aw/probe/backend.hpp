@@ -36,6 +36,10 @@ public:
   // A 16-bit memory-mapped IO register by absolute address, e.g. 0x04000010
   // for REG_BG0HOFS. Returns 0 when unavailable.
   virtual std::uint16_t read_io16(std::uint32_t addr) = 0;
+
+  // Direct memory write access for RTS cursor teleportation and game steering
+  virtual void write8(std::uint32_t addr, std::uint8_t val) {}
+  virtual void write16(std::uint32_t addr, std::uint16_t val) {}
 };
 
 // GBA BG scroll registers. These are hardware, so camera offset needs no

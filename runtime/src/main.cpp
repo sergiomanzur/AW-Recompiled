@@ -60,6 +60,142 @@ std::string hex32(std::uint32_t value) {
   return out.str();
 }
 
+// ---------------------------------------------------------------------------
+// Temporary frame-phase profiler (AW_PERF=1). Measures where the per-frame
+// wall clock actually goes so optimization targets are evidence, not guesses.
+// ---------------------------------------------------------------------------
+enum PerfSlot {
+  PF_EVENTS, PF_PROBE, PF_EMU, PF_REWIND, PF_AUDIO, PF_COPY, PF_OVERLAY, PF_RENDER, PF_VSYNC, PF_PACE, PF_COUNT
+};
+static const char* kPerfNames[PF_COUNT] = {
+  "events", "probe", "emu", "rewind", "audio", "copy", "overlay", "render", "vsync", "pace"
+};
+
+struct PerfCollector {
+  bool enabled = false;
+  double acc[PF_COUNT] = {};
+  double worst[PF_COUNT] = {};
+  double work_worst = 0.0;
+  double work_acc = 0.0;
+  std::uint64_t frames = 0;
+  std::uint64_t over_budget = 0;
+  std::chrono::steady_clock::time_point mark;
+  std::chrono::steady_clock::time_point frame_start;
+  std::chrono::steady_clock::time_point window_start;
+  bool window_started = false;
+
+  void init() {
+#ifdef _WIN32
+    char* v = nullptr; std::size_t n = 0;
+    if (_dupenv_s(&v, &n, "AW_PERF") == 0 && v != nullptr) {
+      enabled = (std::string(v) == "1");
+      std::free(v);
+    }
+#else
+    const char* v = std::getenv("AW_PERF");
+    enabled = (v != nullptr && std::string(v) == "1");
+#endif
+  }
+
+  void begin() {
+    if (!enabled) return;
+    frame_start = std::chrono::steady_clock::now();
+    mark = frame_start;
+    if (!window_started) {
+      window_start = frame_start;
+      window_started = true;
+    }
+  }
+
+  void lap(int slot) {
+    if (!enabled) return;
+    const auto now = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(now - mark).count();
+    mark = now;
+    acc[slot] += ms;
+    if (ms > worst[slot]) worst[slot] = ms;
+  }
+
+  // Called after the render lap, before pacing: everything that must fit in
+  // the 16.74 ms budget.
+  void end_work() {
+    if (!enabled) return;
+    const double ms =
+        std::chrono::duration<double, std::milli>(mark - frame_start).count();
+    work_acc += ms;
+    if (ms > work_worst) work_worst = ms;
+    if (ms > 16.743) ++over_budget;
+    ++frames;
+  }
+
+  int audio_queued = 0;
+
+  void report_if_due() {
+    if (!enabled || frames < 120) return;
+    const double f = static_cast<double>(frames);
+    const double elapsed_s = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - window_start).count();
+    std::fprintf(stderr,
+                 "[perf] %llu frames | ACHIEVED %.3f fps | queued %d | work avg %.2f ms peak %.2f ms | late %llu\n",
+                 static_cast<unsigned long long>(frames),
+                 elapsed_s > 0.0 ? f / elapsed_s : 0.0,
+                 audio_queued,
+                 work_acc / f, work_worst,
+                 static_cast<unsigned long long>(over_budget));
+    for (int i = 0; i < PF_COUNT; ++i) {
+      std::fprintf(stderr, "[perf]   %-8s avg %6.3f ms  peak %7.3f ms\n",
+                   kPerfNames[i], acc[i] / f, worst[i]);
+    }
+    std::fflush(stderr);
+    for (int i = 0; i < PF_COUNT; ++i) { acc[i] = 0.0; worst[i] = 0.0; }
+    work_acc = 0.0; work_worst = 0.0; frames = 0; over_budget = 0;
+    window_started = false;
+  }
+};
+
+bool is_battlefield_map(aw::ProbeBackend& backend, const aw::CursorAddresses& addrs) {
+  if (!addrs.valid()) return false;
+
+  const std::uint16_t dispcnt = backend.read_io16(0x04000000);
+  const std::uint16_t bg2cnt = backend.read_io16(0x0400000C);
+
+  // Advance Wars live map engine runs in Mode 0 (tiled text mode) with BG2 enabled (0x0400).
+  // On title screen and main menus, DISPCNT is Mode 4 bitmap (0x1F44 / 0x1C44) and BG2CNT is 0.
+  if ((dispcnt & 7) != 0 || (dispcnt & 0x0400) == 0 || bg2cnt == 0) {
+    return false;
+  }
+
+  std::size_t iw_size = 0;
+  const std::uint8_t* iwram = backend.iwram(iw_size);
+  if (iwram == nullptr) return false;
+
+  constexpr std::uint32_t kBase = 0x03000000;
+  if (addrs.x_addr < kBase || addrs.y_addr + 2 > kBase + iw_size) return false;
+
+  const std::size_t cur_x_off = addrs.x_addr - kBase;
+  const std::size_t cur_y_off = addrs.y_addr - kBase;
+  const std::size_t map_active_off = (addrs.x_addr + 8) - kBase;
+
+  if (cur_x_off + 2 > iw_size || cur_y_off + 2 > iw_size || map_active_off >= iw_size) {
+    return false;
+  }
+
+  // Active match flag (0x030036AC is strictly 1 during active battlefield gameplay).
+  // On Name Entry, Main Menu, and Title screens, this byte is 0.
+  if (iwram[map_active_off] != 1) {
+    return false;
+  }
+
+  const std::uint16_t tx = static_cast<std::uint16_t>(iwram[cur_x_off]) |
+                           (static_cast<std::uint16_t>(iwram[cur_x_off + 1]) << 8);
+  const std::uint16_t ty = static_cast<std::uint16_t>(iwram[cur_y_off]) |
+                           (static_cast<std::uint16_t>(iwram[cur_y_off + 1]) << 8);
+
+  if (tx >= 50 || ty >= 50) return false;
+
+  return true;
+}
+
 bool pause_disabled() {
 #ifdef _WIN32
   char* value = nullptr;
@@ -175,6 +311,66 @@ Options parse_options(int argc, char** argv) {
 
   return options;
 }
+
+// Sleeps until a deadline without burning a core. The old pacing loop spun on
+// YieldProcessor for the last 2 ms of every frame, which kept one core pinned
+// ~12% of the time for nothing. A high-resolution waitable timer (Win10 1803+)
+// gets within ~0.1 ms, so only a very short spin is left for the tail.
+class FramePacer {
+public:
+  FramePacer() {
+#ifdef _WIN32
+    timer_ = CreateWaitableTimerExW(nullptr, nullptr,
+                                    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                    TIMER_ALL_ACCESS);
+    if (timer_ == nullptr) {
+      // Pre-1803: fall back to a plain timer, still better than spinning.
+      timer_ = CreateWaitableTimerW(nullptr, FALSE, nullptr);
+    }
+#endif
+  }
+
+  ~FramePacer() {
+#ifdef _WIN32
+    if (timer_ != nullptr) CloseHandle(timer_);
+#endif
+  }
+
+  FramePacer(const FramePacer&) = delete;
+  FramePacer& operator=(const FramePacer&) = delete;
+
+  void wait_until(std::chrono::steady_clock::time_point deadline) {
+    using clock = std::chrono::steady_clock;
+#ifdef _WIN32
+    if (timer_ != nullptr) {
+      // Leave a small margin for timer granularity, then spin out the tail.
+      constexpr auto kSpinMargin = std::chrono::microseconds(400);
+      const auto now = clock::now();
+      if (deadline - now > kSpinMargin) {
+        const auto sleep_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            (deadline - kSpinMargin) - now);
+        LARGE_INTEGER due;
+        // Negative = relative, in 100 ns units.
+        due.QuadPart = -(sleep_ns.count() / 100);
+        if (due.QuadPart < 0 &&
+            SetWaitableTimer(timer_, &due, 0, nullptr, nullptr, FALSE)) {
+          WaitForSingleObject(timer_, INFINITE);
+        }
+      }
+    }
+#endif
+    while (clock::now() < deadline) {
+#if defined(_MSC_VER) || defined(__x86_64__) || defined(_M_X64)
+      YieldProcessor();
+#endif
+    }
+  }
+
+private:
+#ifdef _WIN32
+  HANDLE timer_ = nullptr;
+#endif
+};
 
 aw::RewindIo make_rewind_io(struct mCore* core) {
   aw::RewindIo io;
@@ -371,6 +567,16 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
     std::uint64_t total_audio_samples = 0;
     std::uint64_t frames_run = 0;
 
+    // Presenting on the compositor's clock advances the emulator at the
+    // display's rate, not the GBA's 59.7275 Hz, so the core produces samples
+    // slightly faster than a 32768 Hz output drains them. Left alone the audio
+    // queue grows without bound (measured: ~450 ms of latency in under a
+    // minute) and then starts dropping samples. Scaling the output rate by the
+    // same ratio keeps production and consumption matched.
+    const double display_hz = window.display_refresh_hz();
+    int vsync_paced_streak = 0;
+    bool audio_follows_display = false;
+
     bool rewind_was_held = false;
     int rewind_repeat_counter = 0;
     bool ff_was_active = false;
@@ -430,7 +636,12 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       }
     };
 
+    PerfCollector perf;
+    perf.init();
+    FramePacer pacer;
+
     while (window.is_open()) {
+      perf.begin();
       if (window.has_pending_rom()) {
         const std::string new_rom_path = window.consume_pending_rom();
         std::cout << "Switching to new ROM: " << new_rom_path << std::endl;
@@ -464,7 +675,17 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       if (!window.process_events(hardware)) {
         break;
       }
+      perf.lap(PF_EVENTS);
       cheats.set_enabled(window.cheats_enabled());
+
+      // Robust detection of battlefield map gameplay vs menus (Title, Menus, Name Entry, Options)
+      const bool in_gameplay = is_battlefield_map(probe, nav.cursor_addresses());
+
+      // Update Native RTS Steering & Touch/Pointer Navigation
+      nav.set_in_map(in_gameplay);
+      const std::uint16_t nav_keys = nav.update(window.input_frame());
+      hardware.keys_pressed |= nav_keys;
+      perf.lap(PF_PROBE);
 
       // --- Replay control (F6 record toggle, F7 stop, File > Play).
       if (window.consume_record_toggle()) {
@@ -649,14 +870,15 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
           // Update native C++ Tactical Intel & HD Audio Engine
           intel.update(probe, nav.context());
           hd_audio.update(probe);
+          perf.lap(PF_PROBE);
 
           // Capture an undo point at the moment an order is confirmed: an
-          // A press while the map sensor sees live cursor control. The
+          // A press while in live battlefield map gameplay. The
           // snapshot precedes the frame, so undo lands exactly before the
           // unit moved / the menu opened.
           const bool a_edge = (hardware.keys_pressed & aw::kKeyA) != 0 &&
                               (prev_keys & aw::kKeyA) == 0;
-          if (a_edge && map_sensor.in_map() && !replay_playing) {
+          if (a_edge && in_gameplay && !replay_playing) {
             if (order_stack.push() && !undo_capture_logged) {
               undo_capture_logged = true;
               std::cout << "Undo: order point captured (Ctrl+Z to restore)" << std::endl;
@@ -665,6 +887,8 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
 
           if (replay_recorder.active()) replay_recorder.record(hardware.keys_pressed);
           aw_mgba_run_frame(core, hardware.keys_pressed);
+          perf.lap(PF_EMU);
+
           if (cheats.active_count() > 0) {
             for (const aw::CheatCode& c : cheats.codes()) {
               if (c.width == 1) {
@@ -680,6 +904,7 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
           }
           frames_run++;
           rewind_buffer.on_frame();
+          perf.lap(PF_REWIND);
           map_sensor.on_frame(hardware.keys_pressed,
                               read_cursor_tile(probe, nav.cursor_addresses()));
           prev_keys = hardware.keys_pressed;
@@ -695,19 +920,29 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
                       << " RAM write(s) at frame " << frames_run << std::endl;
           }
 
-          // Check for audio sample rate changes from core (e.g. SOUNDBIAS 32768 Hz <-> 65536 Hz)
+          // Check for audio sample rate changes from core (e.g. SOUNDBIAS 32768 Hz <-> 65536 Hz),
+          // scaled to the rate frames are actually being presented at.
           const unsigned current_rate = aw_mgba_audio_sample_rate(core);
-          if (current_rate != 0 && current_rate != audio.sample_rate()) {
-            audio.set_sample_rate(current_rate);
+          if (current_rate != 0) {
+            int target_rate = static_cast<int>(current_rate);
+            if (audio_follows_display) {
+              target_rate = static_cast<int>(
+                  static_cast<double>(current_rate) * display_hz / gba_fps + 0.5);
+            }
+            if (target_rate != audio.sample_rate()) {
+              audio.set_sample_rate(target_rate);
+            }
           }
 
           // Read audio samples from mGBA core and process through HD Audio Engine
-          const std::size_t samples_read = aw_mgba_read_audio(core, audio_samples.data(), audio_samples.size() / 2);
+          const int samples_read =
+              aw_mgba_read_audio(core, audio_samples.data(), audio_samples.size() / 2);
           if (samples_read > 0) {
             hd_audio.mix_audio(audio_samples.data(), samples_read);
             audio.push_samples(audio_samples.data(), samples_read);
             total_audio_samples += samples_read;
           }
+          perf.lap(PF_AUDIO);
         }
       }
       ff_was_active = ff_active;
@@ -729,6 +964,22 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       }
 
       copy_video_frame();
+      perf.lap(PF_COPY);
+
+      // Draw Tactical RTS Tile Reticle & Pointer Overlay ONLY during gameplay on the map
+      if (in_gameplay) {
+        if (const auto* p = window.input_frame().primary_pointer()) {
+          if (p->in_viewport) {
+            const int scroll_x = probe.read_io16(aw::bg_hofs_reg(2));
+            const int scroll_y = probe.read_io16(aw::bg_vofs_reg(2));
+            const int tile_x = (p->gba_x + scroll_x) / 16;
+            const int tile_y = (p->gba_y + scroll_y) / 16;
+            aw::draw_rts_tile_reticle(ppu.framebuffer.data(), ppu.width, ppu.height,
+                                      tile_x, tile_y, scroll_x, scroll_y, 0x00F5A623u);
+            aw::draw_pointer(ppu.framebuffer.data(), ppu.width, ppu.height, p->gba_x, p->gba_y);
+          }
+        }
+      }
 
       // Draw pixel-perfect C++ Tactical Intel HUD overlay if enabled
       if (window.show_hud()) {
@@ -742,11 +993,13 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
                                 replay_recorder.active(), replay_playing);
       }
 
+      perf.lap(PF_OVERLAY);
+
       // Render frame to window, with the tactical sidebar beside the game.
       aw::SidebarData sidebar;
       sidebar.fast_forward = ff_active;
       sidebar.rewinding = rewind_held;
-      sidebar.in_map = map_sensor.in_map();
+      sidebar.in_map = in_gameplay;
       sidebar.cursor_valid = intel.cursor_valid();
       sidebar.cursor_x = intel.cursor_x();
       sidebar.cursor_y = intel.cursor_y();
@@ -767,6 +1020,30 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
       sidebar.cheat_count = cheats.active_count();
       sidebar.forecast = intel.forecast();
       window.render(ppu, sidebar);
+#ifdef _WIN32
+      // GDI batches drawing calls, so timing render() alone would measure only
+      // queue time. Flush so the lap reflects real execution cost.
+      if (perf.enabled) GdiFlush();
+#endif
+      perf.lap(PF_RENDER);
+      perf.end_work();
+
+      // Align with the compositor before pacing, so the wait is attributed to
+      // presentation rather than to frame work.
+      const bool vsync_paced = window.present_wait();
+      perf.lap(PF_VSYNC);
+
+      // Decide "the compositor is pacing us" from a run of frames, not a
+      // single one, so an isolated late frame cannot flip the audio rate.
+      vsync_paced_streak = vsync_paced ? std::min(vsync_paced_streak + 1, 240)
+                                       : std::max(vsync_paced_streak - 1, 0);
+      if (display_hz > 0.0) {
+        if (!audio_follows_display && vsync_paced_streak >= 120) {
+          audio_follows_display = true;
+        } else if (audio_follows_display && vsync_paced_streak == 0) {
+          audio_follows_display = false;
+        }
+      }
 
       if (oam_log.is_open()) {
         const std::uint8_t* oam_bytes = probe.oam();
@@ -797,19 +1074,29 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
                   << (rewind_buffer.total_bytes_held() / 1024) << " KB" << std::endl;
       }
 
-      // High-precision steady frame pacing for locked 60 FPS. Fast-forward
-      // runs unpaced; the clock is re-anchored so 1x resumes without a stall.
-      if (ff_active) {
-        next_frame_time = clock::now();
+      // Steady frame pacing at the GBA's native rate. Skipped when the
+      // compositor already paced the frame (see present_wait); the clock is
+      // re-anchored in that case so 1x resumes without a stall.
+      if (ff_active || vsync_paced) {
+        // Fast-forward runs unpaced; with vsync the compositor already spent
+        // the frame interval, so pacing again here would double-wait and drag
+        // the rate below the target. Re-anchor either way.
+        next_frame_time = clock::now() + frame_duration_ns;
       } else {
-        next_frame_time += frame_duration_ns;
         const auto now = clock::now();
-        if (next_frame_time > now) {
-          std::this_thread::sleep_for(next_frame_time - now);
-        } else if (now - next_frame_time > std::chrono::milliseconds(100)) {
-          next_frame_time = now;
+        if (now < next_frame_time) {
+          pacer.wait_until(next_frame_time);
+          next_frame_time += frame_duration_ns;
+        } else {
+          // Frame took slightly longer than target: re-anchor immediately so
+          // subsequent frames are not squeezed into shorter intervals.
+          next_frame_time = now + frame_duration_ns;
         }
       }
+
+      perf.lap(PF_PACE);
+      if (perf.enabled) perf.audio_queued = audio.queued_frames();
+      perf.report_if_due();
 
       if (max_frames > 0 && frames_run >= static_cast<std::uint64_t>(max_frames)) {
         break;
@@ -834,6 +1121,50 @@ void run_game_loop(std::filesystem::path rom_path, aw::RomImage rom, int max_fra
 
 }  // namespace
 
+// Double-clicking the executable starts it in whatever directory the exe
+// lives in, not the project root, so every relative path the runtime uses
+// (config.ini, the ROM, data/symbols, savestates, replays) would miss. Anchor
+// the working directory on the real data root before anything reads it.
+//
+// A directory only counts as the data root if it holds config.ini *and* a
+// data/ folder. Requiring both matters: the runtime writes config.ini into
+// whatever directory it was started in, so stale copies accumulate inside the
+// build tree, and matching on config.ini alone would happily latch onto one of
+// those and silently run with the wrong settings.
+bool is_data_root(const std::filesystem::path& dir) {
+  std::error_code ec;
+  return std::filesystem::exists(dir / "config.ini", ec) &&
+         std::filesystem::is_directory(dir / "data", ec);
+}
+
+void anchor_working_directory() {
+#ifdef _WIN32
+  if (is_data_root(std::filesystem::current_path())) return;
+
+  wchar_t buffer[MAX_PATH * 4];
+  const DWORD length = GetModuleFileNameW(nullptr, buffer, static_cast<DWORD>(std::size(buffer)));
+  if (length == 0 || length >= std::size(buffer)) return;
+
+  std::filesystem::path dir = std::filesystem::path(buffer).parent_path();
+  for (int depth = 0; depth < 8 && !dir.empty(); ++depth) {
+    if (is_data_root(dir)) {
+      std::error_code ec;
+      std::filesystem::current_path(dir, ec);
+      if (!ec) {
+        std::cout << "Working directory: " << dir.string() << std::endl;
+      }
+      return;
+    }
+    const std::filesystem::path parent = dir.parent_path();
+    if (parent == dir) break;
+    dir = parent;
+  }
+
+  std::cerr << "Warning: could not locate config.ini and data/ from the executable "
+               "location; relative paths may not resolve." << std::endl;
+#endif
+}
+
 int main(int argc, char** argv) {
 #ifdef _WIN32
   // High-precision multimedia timer (1 ms accuracy for smooth frame pacing)
@@ -843,12 +1174,10 @@ int main(int argc, char** argv) {
   // past hard crashes (savestate bring-up debugging depends on it).
   std::setvbuf(stdout, nullptr, _IONBF, 0);
 
-#ifdef AW_BACKEND_RECOMP
+  anchor_working_directory();
+
   std::cout << "AW-Recompiled backend: RECOMP (native static recompilation)"
             << std::endl;
-#else
-  std::cout << "AW-Recompiled backend: MGBA (core bridge)" << std::endl;
-#endif
 
   int exit_code = 0;
   bool pause_on_exit = false;
@@ -858,13 +1187,34 @@ int main(int argc, char** argv) {
     pause_on_exit = options.pause_on_exit;
 
     aw::RomImage rom = aw::load_rom_file(options.rom_path);
+    const auto header = aw::parse_header(rom.bytes);
+    std::cout << "ROM: " << header.title << ' ' << header.game_code << header.maker_code
+              << " Rev " << static_cast<int>(header.version) << '\n';
 
-    if (options.play_enabled) {
+    if (options.trace_enabled) {
+      auto state_ptr = std::make_unique<aw::CpuState>();
+      auto& state = *state_ptr;
+      state.trace_enabled = true;
+      aw::generated::block_080000C0(state);
+      for (int i = 0; i < 136; ++i) {
+        aw::generated::dispatch_one(state);
+      }
+      for (const auto& line : state.trace_lines) {
+        std::cout << line << '\n';
+      }
+      std::cout << "Stopped at unresolved target " << hex32(state.stop_target) << '\n';
+    } else if (options.play_enabled) {
       run_game_loop(options.rom_path, rom, options.max_frames, options.oam_log_path,
                     options.rewind_smoke, options.ips_path, options.replay_path);
     }
   } catch (const std::exception& e) {
     std::cerr << "Fatal error: " << e.what() << std::endl;
+#ifdef _WIN32
+    // Double-clicked launches may not keep a console around long enough
+    // to read stderr; mirror the fatal error into a dialog.
+    MessageBoxA(nullptr, e.what(), "AW-Recompiled - Fatal error",
+                MB_OK | MB_ICONERROR);
+#endif
     exit_code = 1;
   }
 

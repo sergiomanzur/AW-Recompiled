@@ -74,9 +74,9 @@ add_library(aw_runtime STATIC
 
 if (WIN32)
   if(AW_BACKEND STREQUAL "recomp")
-    target_link_libraries(aw_runtime PUBLIC winmm xinput)
+    target_link_libraries(aw_runtime PUBLIC winmm xinput dwmapi)
   else()
-    target_link_libraries(aw_runtime PUBLIC winmm xinput mgba)
+    target_link_libraries(aw_runtime PUBLIC winmm xinput dwmapi mgba)
   endif()
 else()
   if(NOT AW_BACKEND STREQUAL "recomp")
@@ -432,6 +432,19 @@ target_link_libraries(cheats_tests PRIVATE aw_runtime)
 
 add_test(NAME cheats_tests COMMAND cheats_tests)
 
+add_executable(savestate_tests
+  tests/savestate_tests.cpp
+)
+
+target_include_directories(savestate_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
+)
+
+target_link_libraries(savestate_tests PRIVATE aw_runtime)
+
+add_test(NAME savestate_tests COMMAND savestate_tests)
+
 add_executable(advance-wars-native
   src/main.cpp
 )
@@ -511,3 +524,10 @@ target_include_directories(aw-hd-capture PRIVATE
 )
 
 target_link_libraries(aw-hd-capture PRIVATE aw_runtime)
+
+add_executable(screen_probe
+  tools/screen_probe.cpp
+)
+target_include_directories(screen_probe PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+target_link_libraries(screen_probe PRIVATE aw_runtime)
+

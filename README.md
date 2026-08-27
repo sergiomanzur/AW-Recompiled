@@ -1,129 +1,132 @@
 # AW-Recompiled ⚔️
 
-[![Version](https://img.shields.io/badge/version-v0.1--alpha-orange.svg)](https://github.com/)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blue.svg)](https://github.com/)
-[![Language](https://img.shields.io/badge/language-C%2B%2B20%20%2F%20C-00599C.svg)](https://github.com/)
+[![Version](https://img.shields.io/badge/release-v0.1--beta-brightgreen.svg)](https://github.com/sergiomanzur/AW-Recompiled/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%20(x64)-blue.svg)](https://github.com/sergiomanzur/AW-Recompiled/releases)
+[![Language](https://img.shields.io/badge/language-C%2B%2B20%20%2F%20C-00599C.svg)](https://github.com/sergiomanzur/AW-Recompiled)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-**AW-Recompiled** is a native C++ static recompilation and port of *Advance Wars* (Game Boy Advance). By compiling GBA ARM/Thumb binary code directly into native instructions, it provides high-performance native execution, accurate software rendering, and real-time audio playback without traditional emulation overhead.
+**AW-Recompiled** is a high-performance native desktop port and C++ static recompilation of *Advance Wars* (Game Boy Advance). Built as an **AI-assisted passion project**, it translates original GBA ARM/Thumb machine code and hardware calls into native instructions. The result is zero-latency 60 FPS gameplay, accurate software rendering, instant rewind mechanics, and modern quality-of-life additions without traditional emulation overhead.
 
 ---
 
-## ✨ Features (v0.1 Alpha)
+## 🌟 Quick Start (No Building Required!)
 
-- 🎮 **Fully Playable Native Engine**: Native executable rendering at 60 FPS with hardware input mapping — and now selectable between two execution backends: the mGBA core bridge (default) and the **gba-recomp static recompilation backend** (`AW_BACKEND=recomp`), where the game's own code runs as a native DLL and the full feature surface works unchanged.
-- ↩️ **Undo Last Order**: `Ctrl+Z` (or left-stick click) instantly restores the exact moment before your last confirmed move or attack — snapshots are taken at the confirming button press while you are commanding the map.
-- 📊 **Tactical Sidebar**: In widescreen aspect ratios the game keeps its pixel-perfect 3:2 frame while a native console panel fills the extra space — playback mode, cursor tile, undo/rewind depth, and emulation telemetry (`F4` to toggle). Only verified game-state reads are shown; nothing is invented.
-- ⏪ **Instant Turn Rewind (Time Travel)**: Hold `Backspace` to rewind through an in-RAM savestate ring (5-second window by default) — no savestate files, no reloads.
-- ⚡ **Zero-Latency Fast-Forward**: Hold `Tab` (or a controller trigger) to blast through AI turns at hundreds of FPS with clean, pitch-correct 1x audio on release.
-- 🎬 **Replays + Input Display**: `F6` records a run from power-on to a tiny shareable `.awr` file (inputs only — no ROM data); play them back via **File → Play Replay**, even fast-forwarded. `F8` toggles the speedrun-style frame counter + button display over the game.
-- 🎲 **Randomizer Hooks**: Apply any community IPS randomizer patch via **File → Apply IPS Patch** (or `--ips`); the patched game runs from a temp file, no patched-ROM copies to manage. Mined RAM addresses can also be tweaked at boot via `[Randomize]` in config.
-- ✍️ **HD Text Replacement**: An ink-hash tile pack (`aw-hd-capture` builds the starter) swaps the 8×8 GBA font for 16×16 artist tiles at render time — crisp dialogue at any window size, palette-independent matching.
-- 🧪 **Cheats**: RAM-write codes (`[Cheats]` in `config.ini`, `address:width:value` decimal or hex) applied every frame so the game can't fight them off; toggle live from the Settings menu, active count shown in the sidebar.
-- 🖥️ **Internal Resolution Pre-Scaling**: the Internal Resolution setting now genuinely pre-scales the framebuffer (4×/6×/9× for 720p/1080p/4K) with nearest-neighbour before the window stretch.
-- 🔊 **Full Audio Backend**: 16-bit stereo PCM audio synthesis via integrated mGBA core bridge and low-latency Windows `waveOut` audio pipeline.
-- 🖼️ **Software & Windowed Renderer**: High-performance pixel pipeline supporting standard GBA display modes, tile layers, and sprite rendering.
-- 🛠️ **Cross-Platform Toolchain**: Built with CMake & Ninja, supporting Clang, GCC, and MSVC.
-- 🔍 **Instruction & Block Tracing**: Diagnostic disassembly and instruction trace tools built into the runtime.
+1. Download the pre-built **`advance-wars-v0.1b-windows.zip`** from the [Latest Release](https://github.com/sergiomanzur/AW-Recompiled/releases).
+2. Extract the archive to any folder.
+3. Launch `advance-wars-native.exe`.
+4. **First Launch ROM Prompt**: On your first launch, the executable will automatically pop up a native Windows file dialog asking you to select your legally acquired *Advance Wars (USA)* GBA ROM. Once selected, your path is saved to `config.ini` for all future launches!
+
+---
+
+## ✨ Features (v0.1 Beta Release)
+
+- 🎮 **Native Desktop Engine & Dual Execution Backends**:
+  - **mGBA Core Bridge (Default)**: Embedded high-precision GBA execution pipeline.
+  - **`gba-recomp` Static Recompilation**: Direct native ARM/Thumb translation layer running compiled GBA machine code as a native library (`AW_BACKEND=recomp`).
+- 🖱️ **Mouse & Pointer Navigation**: Direct point-and-click map navigation, unit selection, and command execution alongside classic gamepad/keyboard controls.
+- ↩️ **Undo Last Order (`Ctrl+Z` / `L3`)**: Single-press instant restoration to the exact frame prior to your last confirmed movement or attack order.
+- ⏪ **Instant Rewind (Time Travel)**: Hold `Backspace` (or `Y`/`LT` on controller) to seamlessly step backward through up to 5 seconds of in-RAM gameplay history.
+- ⚡ **Zero-Latency Fast-Forward**: Hold `Tab` (or `X`/`RT` on controller) to accelerate AI turns at hundreds of FPS with pitch-correct 1x audio restoration upon release.
+- 📊 **Tactical Sidebar Telemetry**: Integrated widescreen telemetry panel (`F4` toggle) presenting live cursor tile reads, playback mode, undo depth, and emulation stats.
+- 🎬 **Input Replays & Speedrun Overlay**:
+  - `F6` records frame-accurate input logs to lightweight `.awr` files (zero ROM data included).
+  - Play replays back via **File → Play Replay**.
+  - `F8` toggles an on-screen speedrun input display and frame counter.
+- 🎲 **Randomizer Hooks & Live IPS Patching**:
+  - Apply community IPS patches on the fly via **File → Apply IPS Patch** or `--ips` command-line argument.
+  - Boot-time RAM write injection hooks configured under `[Randomize]` in `config.ini`.
+- ✍️ **HD Text Replacement**: Custom 16×16 font rendering engine with palette-independent ink-hash tile matching.
+- 🧪 **Per-Frame Cheat Engine**: Armed RAM cheat code injection (`[Cheats]` in `config.ini`) evaluated continuously every frame.
+- 🖼️ **Framebuffer Pre-Scaling**: Native resolution pre-scaling (4×/6×/9× for 720p/1080p/4K display output) with nearest-neighbor clarity.
+- 🔊 **Stereo Audio Engine**: 16-bit PCM stereo audio via a low-latency Windows `waveOut` audio pipeline.
 
 ---
 
 ## 🎮 Controls
 
-| GBA Button | Keyboard Key |
-| :--- | :--- |
-| **D-Pad Up / Down / Left / Right** | Arrow Keys (`Up` / `Down` / `Left` / `Right`) |
-| **Button A** | `Z` / `Space` |
-| **Button B** | `X` |
-| **Start** | `Enter` |
-| **Select** | `Shift` |
-| **L Shoulder** | `Q` |
-| **R Shoulder** | `E` |
-
-### ⏪ Time Travel & Fast-Forward
-
-| Action | Keyboard | XInput Controller |
+| GBA Button | Keyboard Key | Xbox / XInput Controller |
 | :--- | :--- | :--- |
-| **Undo Last Order** (one press = one order undone) | `Ctrl+Z` | Left stick click (`L3`) |
-| **Instant Rewind** (hold to step back ~1/3 s per step, release to resume) | `Backspace` (hold) | `Y` or `LT` (hold) |
-| **Fast-Forward** (hold for max-speed emulation, release for 1x) | `Tab` (hold) | `X` or `RT` (hold) |
-| **Record Replay** (starts from power-on) / finish | `F6` | — |
-| **Stop Replay Playback** | `F7` | — |
-| **Input Display + Frame Counter** | `F8` | — |
+| **D-Pad Up / Down / Left / Right** | Arrow Keys (`Up` / `Down` / `Left` / `Right`) | D-Pad / Left Analog Stick |
+| **Button A** | `Z` / `Space` | `A` Button |
+| **Button B** | `X` | `B` Button |
+| **Start** | `Enter` | `Start` / Menu Button |
+| **Select** | `Shift` | `Back` / View Button |
+| **L Shoulder** | `Q` | `LB` Trigger |
+| **R Shoulder** | `E` | `RB` Trigger |
 
-- Rewind keeps an in-RAM savestate ring (up to **5 seconds** of history by default; no disk I/O, no savestate slots touched). Holding rewinds through your last moves, attacks, or combat animations; releasing resumes play from that point. Snapshots older than the window are evicted automatically, so you can never rewind further back than the limit.
-- Fast-forward mutes timeline audio while held (no pitch distortion, no drifting sync) and returns to clean 1x playback on release. Both modes show their state in the window title, and are also available from the **File** menu.
-- Tunable in `config.ini` under `[Rewind]`: `enabled`, `snapshot_interval` (frames between snapshots), `capacity` (ring size), `max_seconds` (rewind window, default 5).
+### ⏪ Hotkeys & Telemetry
 
-### 🎬 Replays
-
-- `F6` starts recording: the console power-cycles so the file replays from frame 0, then every fed input is logged (2 bytes per frame — about 430 KB per hour). The ROM's SHA-1 travels in the header, and playback refuses a mismatched revision instead of silently desyncing. Files contain no ROM data, so they're safe to share.
-- Play back with **File → Play Replay…** (or `--replay run.awr`); `Tab` fast-forwards a replay just like live play, and `F7` stops it. Loading savestates during playback is refused to protect the input stream.
-- `F8` toggles the on-game status strip: emulated frame counter plus every held GBA button (speedrun/capture friendly), with REC/PLAY markers while a replay is active.
-
-### 🎲 Randomizing
-
-- **File → Apply IPS Patch…** stages any IPS patch (the format community AW randomizers ship) and reboots with it applied; the choice persists in `config.ini` under `[Patches]`. The patched image lives in a temp file while playing — clear the setting and reboot to return to vanilla. `--ips patch.ips` does the same from the command line.
-- Mined RAM addresses can be written once at boot via `[Randomize]` (`apply_frame`, plus `write1 = address:value` decimal slots) — see `data/symbols/README.md` for the mining workflow.
-
-### ✍️ HD text packs
-
-- Run `aw-hd-capture "<rom>" [state.ss] --mash` to dump every distinct 8×8 framebuffer block as an identity-upscaled starter pack under `data/hd/tiles/`. Redraw any `_16.bmp` by hand (dark pixels = ink), enable **Settings → HD Text Replacement**, and exactly those glyphs render at 2x with the game's own palette. Matching is by ink shape, not colour, so one tile covers the glyph everywhere it appears.
+| Action | Key / Input |
+| :--- | :--- |
+| **Undo Last Order** | `Ctrl+Z` / Left Stick Click (`L3`) |
+| **Instant Rewind (Hold)** | `Backspace` / `Y` / `LT` |
+| **Fast-Forward (Hold)** | `Tab` / `X` / `RT` |
+| **Toggle Tactical Sidebar** | `F4` |
+| **Save State / Load State** | `F5` / `F9` |
+| **Record Replay / Stop** | `F6` / `F7` |
+| **Toggle Speedrun Key Display** | `F8` |
 
 ---
 
-## 🛠️ Building & Running
+## 📜 ROM Policy & First Launch
+
+This repository and its binary releases do **NOT** contain any copyrighted ROM files, game code, or proprietary graphics/audio assets.
+
+- **Required ROM**: *Advance Wars (USA) (Rev 1)* GBA ROM.
+- **Expected SHA-1 Hash**: `15053499D5B3F49128A941D7F2D84876F5424D0C`
+- **First-Launch Prompt**: When launching `advance-wars-native.exe` for the first time, a Windows dialog will ask you to select your GBA ROM file. Your selection is automatically recorded in `config.ini`.
+
+---
+
+## 🤝 External Repositories & Acknowledgments
+
+AW-Recompiled stands on the shoulders of these incredible open-source projects:
+
+- **[mGBA](https://github.com/mgba-emu/mgba)** by endrift & mGBA contributors — Provides the high-precision GBA emulation core bridge, PPU timing, and hardware memory map interface (`third-party/mgba`).
+- **[gba-recomp](https://github.com/JRickey/gba-recomp)** by JRickey — The static recompilation framework that translates ARM/Thumb GBA machine code into native executable code blocks.
+
+---
+
+## 🛠️ Building from Source
 
 ### Prerequisites
-- **CMake** (v3.20 or newer)
-- **C++20 Compiler** (Clang / MSVC / GCC)
-- **Ninja** or Visual Studio build system
+- **CMake** (v3.25 or newer)
+- **C++20 Compiler** (MSVC 2022, Clang, or GCC)
+- **Ninja** or Visual Studio build tools
 - **Python** (3.10+)
 
-### Building from Source
+### Build Instructions (Windows - mGBA Default Backend)
 
 ```powershell
-# Configure build directory
-cmake -S . -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Debug
+# Configure build output
+cmake -S . -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release
 
-# Build native runtime executable
+# Build native executable
 cmake --build build/native --target advance-wars-native
 ```
 
-The compiled executable will be located at:
-`build/native/runtime/advance-wars-native.exe`
-
-### Running the Game
-
-Provide the path to a legally obtained dump of *Advance Wars (USA) (Rev 1)*:
-
-```powershell
-.\build\native\runtime\advance-wars-native.exe "rom\Advance Wars (USA) (Rev 1).gba"
-```
+The resulting executable will be located at:
+`build\native\runtime\advance-wars-native.exe`
 
 ---
 
-## 📜 ROM Policy
+## 🚀 Future Roadmap
 
-This repository does **not** contain any copyrighted ROM files or game assets. Users must provide their own legally acquired dump of the original game cartridge:
+We are actively expanding platform support! Look out for future release builds targeting:
 
-- **Target ROM**: *Advance Wars (USA) (Rev 1)*
-- **Expected SHA-1**: `15053499D5B3F49128A941D7F2D84876F5424D0C`
-
----
-
-## 📁 Repository Structure
-
-```
-├── runtime/       # Core native C++ engine, audio system, and windowing
-├── config/        # Recompilation maps and disassembly definitions
-├── docs/          # Architecture documentation and notes
-├── scripts/       # Tooling and verification scripts
-├── third-party/   # Submodules & libraries (libmgba, etc.)
-└── tools/         # Recompilation generators and utility scripts
-```
+- 📱 **Android**: Touch-native interface, mobile renderer, and low-latency audio.
+- 🎮 **SteamOS**: Native Linux binaries optimized for Steam Deck controls and performance profiles.
+- 🍎 **macOS**: Universal native builds for Apple Silicon (M-series) and Intel Macs.
 
 ---
 
-## 📄 License
+## 👐 Open Source & Community Contributions
 
-Distributed under the MIT License. See `LICENSE` for more information.
+AW-Recompiled is 100% **free and open source**.
+
+- **Forks & Pull Requests**: All contributions, bug fixes, feature requests, and forks are warmly welcomed! Feel free to submit PRs or open issues.
+- **License**: Distributed under the permissive [MIT License](LICENSE).
+
+---
+
+*Advance Wars is a registered trademark of Nintendo / Intelligent Systems. This project is an independent open-source recreation and is not affiliated with or endorsed by Nintendo.*

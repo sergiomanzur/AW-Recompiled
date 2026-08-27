@@ -18,6 +18,8 @@ public:
   const std::uint8_t* ewram(std::size_t& size_out) override;
   const std::uint8_t* iwram(std::size_t& size_out) override;
   std::uint16_t read_io16(std::uint32_t addr) override;
+  void write8(std::uint32_t addr, std::uint8_t val) override;
+  void write16(std::uint32_t addr, std::uint16_t val) override;
 
 private:
   void resolve();

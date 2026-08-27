@@ -1,5 +1,5 @@
 /*
- * mgba_adapter.c — Pure C bridge to libmgba.
+ * mgba_adapter.c ΓÇö Pure C bridge to libmgba.
  *
  * CRITICAL: <mgba/flags.h> MUST be included FIRST so that the struct layout
  * (MINIMAL_CORE, ENABLE_VFS, ENABLE_DIRECTORIES, etc.) matches mgba.lib exactly.

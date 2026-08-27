@@ -28,10 +28,16 @@ const FRAME_STEP_GUARD: u64 = 5_000_000;
 
 type BlockFn = extern "C" fn(*const gba_core::capi::RtApi, *mut c_void) -> u32;
 
-struct BlockTable {
-    rom: Vec<Option<BlockFn>>,
-    iwram: Vec<Option<BlockFn>>,
-    other: std::collections::HashMap<u32, BlockFn>,
+extern "C" fn default_step_fn(_api: *const gba_core::capi::RtApi, m: *mut c_void) -> u32 {
+    let mach = unsafe { &mut *(m as *mut Machine) };
+    mach.step();
+    0
+}
+
+pub struct BlockTable {
+    rom: Vec<BlockFn>,
+    iwram: Vec<BlockFn>,
+    ewram: Vec<BlockFn>,
     len: usize,
 }
 
@@ -52,29 +58,38 @@ impl BlockTable {
 
             let mut rom_max = 0usize;
             for b in blocks {
-                let r = b.key.wrapping_sub(ROM_BASE) as usize;
-                if r < 0x0200_0000 {
+                let r = (b.key & 0x01FF_FFFF) as usize;
+                if b.key >> 24 >= 8 && b.key >> 24 <= 0xD {
                     rom_max = rom_max.max(r + 1);
                 }
             }
             let mut t = BlockTable {
-                rom: vec![None; rom_max],
-                iwram: vec![None; 0x8000],
-                other: std::collections::HashMap::new(),
+                rom: vec![default_step_fn; rom_max],
+                iwram: vec![default_step_fn; 0x8000],
+                ewram: vec![default_step_fn; 0x4_0000],
                 len: blocks.len(),
             };
             for b in blocks {
-                let r = b.key.wrapping_sub(ROM_BASE) as usize;
-                let w = b.key.wrapping_sub(IWRAM_BASE) as usize;
-                let e = b.key.wrapping_sub(EWRAM_BASE) as usize;
-                if r < t.rom.len() {
-                    t.rom[r] = Some(b.func);
-                } else if w < t.iwram.len() {
-                    t.iwram[w] = Some(b.func);
-                } else if e < 0x4_0000 {
-                    t.other.insert(b.key, b.func);
-                } else {
-                    t.other.insert(b.key, b.func);
+                match b.key >> 24 {
+                    0x08..=0x0D => {
+                        let r = (b.key & 0x01FF_FFFF) as usize;
+                        if r < t.rom.len() {
+                            t.rom[r] = b.func;
+                        }
+                    }
+                    0x03 => {
+                        let w = (b.key & 0x7FFF) as usize;
+                        if w < t.iwram.len() {
+                            t.iwram[w] = b.func;
+                        }
+                    }
+                    0x02 => {
+                        let e = (b.key & 0x3_FFFF) as usize;
+                        if e < t.ewram.len() {
+                            t.ewram[e] = b.func;
+                        }
+                    }
+                    _ => {}
                 }
             }
             Ok(t)
@@ -82,16 +97,34 @@ impl BlockTable {
     }
 
     #[inline(always)]
-    fn get(&self, key: u32) -> Option<BlockFn> {
-        let r = key.wrapping_sub(ROM_BASE) as usize;
-        if r < self.rom.len() {
-            return self.rom[r];
+    fn get(&self, key: u32) -> BlockFn {
+        match key >> 24 {
+            0x08..=0x0D => {
+                let r = (key & 0x01FF_FFFF) as usize;
+                if r < self.rom.len() {
+                    unsafe { *self.rom.get_unchecked(r) }
+                } else {
+                    default_step_fn
+                }
+            }
+            0x03 => {
+                let w = (key & 0x7FFF) as usize;
+                if w < self.iwram.len() {
+                    unsafe { *self.iwram.get_unchecked(w) }
+                } else {
+                    default_step_fn
+                }
+            }
+            0x02 => {
+                let e = (key & 0x3_FFFF) as usize;
+                if e < self.ewram.len() {
+                    unsafe { *self.ewram.get_unchecked(e) }
+                } else {
+                    default_step_fn
+                }
+            }
+            _ => default_step_fn,
         }
-        let w = key.wrapping_sub(IWRAM_BASE) as usize;
-        if w < self.iwram.len() {
-            return self.iwram[w];
-        }
-        self.other.get(&key).copied()
     }
 }
 
@@ -106,6 +139,9 @@ pub struct Host {
 }
 
 fn convert_frame(src: &[u16], dst: *mut u32) {
+    if dst.is_null() {
+        return;
+    }
     // GBA BGR555 (xbbbbbgggggrrrrr) -> the layout the mGBA adapter handed
     // the runtime: low byte = red, so the existing R/B swap in the copy
     // path produces RGB in the window framebuffer.
@@ -128,25 +164,27 @@ pub extern "C" fn aw_recomp_create(rom_path: *const i8, dll_path: *const i8, vid
     let rom = match std::fs::read(&rom_path) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("aw-recomp-host: cannot read ROM {rom_path}: {e}");
+            eprintln!("aw-recomp-host: failed to read ROM at {rom_path}: {e}");
             return std::ptr::null_mut();
         }
     };
-    let lib = match unsafe { Library::new(PathBuf::from(&dll_path)) } {
+
+    let lib = match unsafe { Library::new(&dll_path) } {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("aw-recomp-host: cannot load recompiled game {dll_path}: {e}");
-            eprintln!("aw-recomp-host: build it first: recomp build <rom> (see data/recomp/README.md)");
+            eprintln!("aw-recomp-host: failed to load game DLL at {dll_path}: {e}");
             return std::ptr::null_mut();
         }
     };
+
     let table = match BlockTable::load(&lib) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("aw-recomp-host: bad block table in {dll_path}: {e}");
+            eprintln!("aw-recomp-host: corrupt/incompatible block table in {dll_path}: {e}");
             return std::ptr::null_mut();
         }
     };
+
     println!(
         "aw-recomp-host: {} translated blocks loaded from {}",
         table.len, dll_path
@@ -178,6 +216,9 @@ pub extern "C" fn aw_recomp_run_frame(h: *mut Host, keys: u16) {
     m.bus.frame_ready = false;
     let mptr = m as *mut Machine as *mut c_void;
 
+    let t_start = std::time::Instant::now();
+    let mut block_duration = std::time::Duration::ZERO;
+    let mut step_duration = std::time::Duration::ZERO;
     let mut steps = 0u64;
     while !m.bus.frame_ready && steps < FRAME_STEP_GUARD {
         steps += 1;
@@ -187,40 +228,43 @@ pub extern "C" fn aw_recomp_run_frame(h: *mut Host, keys: u16) {
                 && m.cpu.mode() == gba_core::Mode::Irq)
             || (m.bus.irq_pending() && !m.cpu.flag(FLAG_I))
         {
+            let t0 = std::time::Instant::now();
             m.step();
+            step_duration += t0.elapsed();
             continue;
         }
         let key = m.cpu.regs[15] | m.cpu.thumb() as u32;
-        // Audio-engine hooks at block granularity (same as upstream runc).
         if let Some(hk) = m.bus.mp2k.as_deref() {
             if hk.active && hk.hook_match(key) {
                 m.bus.mp2k_frame_hook(key);
             }
         }
-        if let Some(g) = m.bus.gax.as_deref() {
-            if g.hook_match(key) {
-                let r0 = m.cpu.regs[0];
-                m.bus.gax_frame_hook(key, r0);
-            }
-        }
-        if let Some(rr) = m.bus.rdrv.as_deref() {
-            if rr.hook_match(key) {
-                m.bus.rdrv_frame_hook(key);
-            }
-        }
-        match h.table.get(key) {
-            Some(f) => {
-                f(&RT_API, mptr);
-                h.native_blocks += 1;
-            }
-            None => {
-                m.step();
-                h.fallback_steps += 1;
-            }
-        }
+        let f = h.table.get(key);
+        let t0 = std::time::Instant::now();
+        f(&RT_API, mptr);
+        block_duration += t0.elapsed();
     }
 
+    let t_conv = std::time::Instant::now();
     convert_frame(&m.bus.framebuffer, h.video);
+    let conv_duration = t_conv.elapsed();
+    let total_duration = t_start.elapsed();
+
+    static mut FRAME_COUNTER: u32 = 0;
+    unsafe {
+        FRAME_COUNTER += 1;
+        if FRAME_COUNTER <= 5 || FRAME_COUNTER % 30 == 0 {
+            eprintln!(
+                "Frame {}: total={:.2}ms, blocks={:.2}ms (steps={}), m.step={:.2}ms, convert={:.2}ms",
+                FRAME_COUNTER,
+                total_duration.as_secs_f64() * 1000.0,
+                block_duration.as_secs_f64() * 1000.0,
+                steps,
+                step_duration.as_secs_f64() * 1000.0,
+                conv_duration.as_secs_f64() * 1000.0
+            );
+        }
+    }
 }
 
 #[no_mangle]
@@ -344,18 +388,37 @@ pub extern "C" fn aw_recomp_snapshot_size(snap: *mut Machine) -> u64 {
 }
 
 #[no_mangle]
-pub extern "C" fn aw_recomp_save_state_file(_h: *mut Host, _path: *const i8) -> i32 {
-    // File-format savestates are not implemented on this backend yet;
-    // memory snapshots (rewind/undo) are. F5/F9 file states remain an
-    // mGBA-backend feature until a serializer lands here.
-    eprintln!("aw-recomp-host: file savestates not supported on the recomp backend yet");
-    0
+pub extern "C" fn aw_recomp_save_state_file(h: *mut Host, path: *const i8) -> i32 {
+    use std::ffi::CStr;
+    if h.is_null() || path.is_null() {
+        return 0;
+    }
+    let path_str = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+    let host = unsafe { &*h };
+    match host.machine.save_state_to_file(&path_str) {
+        Ok(()) => 1,
+        Err(e) => {
+            eprintln!("aw-recomp-host: failed to save state to {path_str}: {e}");
+            0
+        }
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn aw_recomp_load_state_file(_h: *mut Host, _path: *const i8) -> i32 {
-    eprintln!("aw-recomp-host: file savestates not supported on the recomp backend yet");
-    0
+pub extern "C" fn aw_recomp_load_state_file(h: *mut Host, path: *const i8) -> i32 {
+    use std::ffi::CStr;
+    if h.is_null() || path.is_null() {
+        return 0;
+    }
+    let path_str = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+    let host = unsafe { &mut *h };
+    match host.machine.load_state_from_file(&path_str) {
+        Ok(()) => 1,
+        Err(e) => {
+            eprintln!("aw-recomp-host: failed to load state from {path_str}: {e}");
+            0
+        }
+    }
 }
 
 #[no_mangle]

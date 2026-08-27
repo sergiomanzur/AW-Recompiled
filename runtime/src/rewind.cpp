@@ -37,6 +37,8 @@ bool RewindBuffer::capture_snapshot() {
     return false;
   }
 
+  evict_expired();
+
   void* snapshot = io_.capture(io_.user);
   if (snapshot == nullptr) {
     ++consecutive_failures_;
@@ -103,7 +105,6 @@ void RewindBuffer::on_frame() {
     return;
   }
   ++frames_elapsed_;
-  evict_expired();
   ++frames_since_snapshot_;
   if (frames_since_snapshot_ >= snapshot_interval_) {
     frames_since_snapshot_ = 0;

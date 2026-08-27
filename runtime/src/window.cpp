@@ -5,6 +5,9 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <dwmapi.h>
+
+#include <chrono>
 #include <commctrl.h>
 #include <commdlg.h>
 #include <xinput.h>
@@ -240,40 +243,61 @@ void apply_scale2x(const std::uint32_t* src, std::uint32_t* dst, int w, int h) {
 }
 
 void apply_bilinear_2x(const std::uint32_t* src, std::uint32_t* dst, int w, int h) {
+  // Exact 2x bilinear in fixed point. At a scale of exactly two the sample
+  // weights only ever take two values per axis (1/4 and 3/4), so the whole
+  // filter reduces to a 2x2 blend with sixteenths -- no per-pixel float work.
+  // The float version cost ~3.7 ms a frame, a quarter of the frame budget,
+  // and its truncating source index gave the top/left edge negative weights.
   const int out_w = w * 2;
   const int out_h = h * 2;
+
   for (int y = 0; y < out_h; ++y) {
-    const float src_y = (y + 0.5f) * 0.5f - 0.5f;
-    const int y0 = (src_y < 0) ? 0 : ((static_cast<int>(src_y) < h - 1) ? static_cast<int>(src_y) : h - 1);
-    const int y1 = (y0 + 1 < h) ? (y0 + 1) : (h - 1);
-    const float fy = src_y - y0;
+    const int ky = y >> 1;
+    // Even output rows sample toward the previous source row, odd toward the
+    // next; the nearer row always carries the 3/4 weight.
+    const bool y_low = (y & 1) == 0;
+    const int y0 = y_low ? (ky > 0 ? ky - 1 : 0) : ky;
+    const int y1 = y_low ? ky : (ky + 1 < h ? ky + 1 : h - 1);
+    const int wy0 = y_low ? 1 : 3;
+    const int wy1 = 4 - wy0;
+
+    const std::uint32_t* row0 = src + static_cast<std::size_t>(y0) * w;
+    const std::uint32_t* row1 = src + static_cast<std::size_t>(y1) * w;
+    std::uint32_t* out = dst + static_cast<std::size_t>(y) * out_w;
 
     for (int x = 0; x < out_w; ++x) {
-      const float src_x = (x + 0.5f) * 0.5f - 0.5f;
-      const int x0 = (src_x < 0) ? 0 : ((static_cast<int>(src_x) < w - 1) ? static_cast<int>(src_x) : w - 1);
-      const int x1 = (x0 + 1 < w) ? (x0 + 1) : (w - 1);
-      const float fx = src_x - x0;
+      const int kx = x >> 1;
+      const bool x_low = (x & 1) == 0;
+      const int x0 = x_low ? (kx > 0 ? kx - 1 : 0) : kx;
+      const int x1 = x_low ? kx : (kx + 1 < w ? kx + 1 : w - 1);
+      const int wx0 = x_low ? 1 : 3;
+      const int wx1 = 4 - wx0;
 
-      const std::uint32_t c00 = src[y0 * w + x0];
-      const std::uint32_t c10 = src[y0 * w + x1];
-      const std::uint32_t c01 = src[y1 * w + x0];
-      const std::uint32_t c11 = src[y1 * w + x1];
+      const std::uint32_t c00 = row0[x0];
+      const std::uint32_t c10 = row0[x1];
+      const std::uint32_t c01 = row1[x0];
+      const std::uint32_t c11 = row1[x1];
 
-      const float w00 = (1.0f - fx) * (1.0f - fy);
-      const float w10 = fx * (1.0f - fy);
-      const float w01 = (1.0f - fx) * fy;
-      const float w11 = fx * fy;
+      // Weights are sixteenths and sum to 16, so the blend is a shift.
+      const std::uint32_t w00 = static_cast<std::uint32_t>(wx0 * wy0);
+      const std::uint32_t w10 = static_cast<std::uint32_t>(wx1 * wy0);
+      const std::uint32_t w01 = static_cast<std::uint32_t>(wx0 * wy1);
+      const std::uint32_t w11 = static_cast<std::uint32_t>(wx1 * wy1);
 
-      const std::uint32_t r00 = (c00 >> 16) & 0xFF, g00 = (c00 >> 8) & 0xFF, b00 = c00 & 0xFF;
-      const std::uint32_t r10 = (c10 >> 16) & 0xFF, g10 = (c10 >> 8) & 0xFF, b10 = c10 & 0xFF;
-      const std::uint32_t r01 = (c01 >> 16) & 0xFF, g01 = (c01 >> 8) & 0xFF, b01 = c01 & 0xFF;
-      const std::uint32_t r11 = (c11 >> 16) & 0xFF, g11 = (c11 >> 8) & 0xFF, b11 = c11 & 0xFF;
+      // Red and blue occupy alternating byte lanes, so they blend together in
+      // one set of operations; green is done on its own lane.
+      const std::uint32_t rb = (((c00 & 0x00FF00FFu) * w00 +
+                                 (c10 & 0x00FF00FFu) * w10 +
+                                 (c01 & 0x00FF00FFu) * w01 +
+                                 (c11 & 0x00FF00FFu) * w11 +
+                                 0x00080008u) >> 4) & 0x00FF00FFu;
+      const std::uint32_t g = (((c00 & 0x0000FF00u) * w00 +
+                                (c10 & 0x0000FF00u) * w10 +
+                                (c01 & 0x0000FF00u) * w01 +
+                                (c11 & 0x0000FF00u) * w11 +
+                                0x00000800u) >> 4) & 0x0000FF00u;
 
-      const auto r = static_cast<std::uint32_t>(r00 * w00 + r10 * w10 + r01 * w01 + r11 * w11 + 0.5f);
-      const auto g = static_cast<std::uint32_t>(g00 * w00 + g10 * w10 + g01 * w01 + g11 * w11 + 0.5f);
-      const auto b = static_cast<std::uint32_t>(b00 * w00 + b10 * w10 + b01 * w01 + b11 * w11 + 0.5f);
-
-      dst[y * out_w + x] = 0xFF000000u | (r << 16) | (g << 8) | b;
+      out[x] = 0xFF000000u | rb | g;
     }
   }
 }
@@ -404,6 +428,14 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
           std::cout << "Tactical Sidebar: " << (win->sidebar_enabled() ? "ENABLED" : "DISABLED")
                     << std::endl;
         }
+      } else if (id == IDM_SETTINGS_INPUT_DISPLAY) {
+        if (win != nullptr) {
+          win->set_input_display(!win->input_display());
+          ConfigFile config;
+          config.load("config.ini");
+          win->save_config(config);
+          std::cout << "Input Display: " << (win->input_display() ? "ENABLED" : "DISABLED") << std::endl;
+        }
       } else if (id == IDM_SETTINGS_HD_TEXT) {
         if (win != nullptr) {
           win->toggle_hd_text();
@@ -429,6 +461,16 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
           "About AW-Recompiled",
           MB_OK | MB_ICONINFORMATION);
       }
+      return 0;
+    }
+    case WM_ERASEBKGND:
+      return 1;
+    case WM_PAINT: {
+      PAINTSTRUCT ps;
+      HDC hdc = BeginPaint(hwnd, &ps);
+      HBRUSH black = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+      FillRect(hdc, &ps.rcPaint, black);
+      EndPaint(hwnd, &ps);
       return 0;
     }
     case WM_DESTROY:
@@ -582,6 +624,24 @@ Window::Window(int width, int height, const char* title)
     hwnd_ = static_cast<void*>(hwnd);
     hdc_ = static_cast<void*>(GetDC(hwnd));
     is_open_ = true;
+
+    // Cache GDI drawing resources for zero-allocation rendering
+    body_font_ = CreateFontA(-15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                             FIXED_PITCH | FF_MODERN, "Consolas");
+    head_font_ = CreateFontA(-15, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
+                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                             FIXED_PITCH | FF_MODERN, "Consolas");
+    sidebar_bg_brush_ = CreateSolidBrush(RGB(13, 17, 23));
+    sidebar_accent_brush_ = CreateSolidBrush(RGB(74, 144, 226));
+    sidebar_rule_brush_ = CreateSolidBrush(RGB(45, 55, 70));
+    black_brush_ = GetStockObject(BLACK_BRUSH);
+
+    ShowWindow(hwnd, SW_SHOWNORMAL);
+    UpdateWindow(hwnd);
+    SetForegroundWindow(hwnd);
+    RegisterTouchWindow(hwnd, 0);
+
     update_menu_checks();
   } else {
     std::cerr << "CreateWindowExA failed, error code: " << GetLastError() << std::endl;
@@ -589,6 +649,47 @@ Window::Window(int width, int height, const char* title)
 }
 
 Window::~Window() {
+  if (back_dc_ != nullptr) {
+    if (back_bm_ != nullptr) {
+      SelectObject(static_cast<HDC>(back_dc_), static_cast<HBITMAP>(back_bm_old_));
+      DeleteObject(static_cast<HBITMAP>(back_bm_));
+      back_bm_ = nullptr;
+    }
+    DeleteDC(static_cast<HDC>(back_dc_));
+    back_dc_ = nullptr;
+  }
+
+  if (sidebar_dc_ != nullptr) {
+    if (sidebar_bm_ != nullptr) {
+      SelectObject(static_cast<HDC>(sidebar_dc_), static_cast<HBITMAP>(sidebar_bm_old_));
+      DeleteObject(static_cast<HBITMAP>(sidebar_bm_));
+      sidebar_bm_ = nullptr;
+    }
+    DeleteDC(static_cast<HDC>(sidebar_dc_));
+    sidebar_dc_ = nullptr;
+  }
+
+  if (body_font_ != nullptr) {
+    DeleteObject(static_cast<HFONT>(body_font_));
+    body_font_ = nullptr;
+  }
+  if (head_font_ != nullptr) {
+    DeleteObject(static_cast<HFONT>(head_font_));
+    head_font_ = nullptr;
+  }
+  if (sidebar_bg_brush_ != nullptr) {
+    DeleteObject(static_cast<HBRUSH>(sidebar_bg_brush_));
+    sidebar_bg_brush_ = nullptr;
+  }
+  if (sidebar_accent_brush_ != nullptr) {
+    DeleteObject(static_cast<HBRUSH>(sidebar_accent_brush_));
+    sidebar_accent_brush_ = nullptr;
+  }
+  if (sidebar_rule_brush_ != nullptr) {
+    DeleteObject(static_cast<HBRUSH>(sidebar_rule_brush_));
+    sidebar_rule_brush_ = nullptr;
+  }
+
   if (hwnd_ != nullptr) {
     if (hdc_ != nullptr) {
       ReleaseDC(static_cast<HWND>(hwnd_), static_cast<HDC>(hdc_));
@@ -620,7 +721,7 @@ void Window::set_aspect_ratio(AspectRatio ratio) {
   }
 
   if (hwnd_ != nullptr) {
-    InvalidateRect(static_cast<HWND>(hwnd_), nullptr, TRUE);
+    InvalidateRect(static_cast<HWND>(hwnd_), nullptr, FALSE);
   }
 }
 
@@ -628,8 +729,15 @@ void Window::set_internal_resolution(InternalResolution res) {
   internal_resolution_ = res;
   update_menu_checks();
 
+  switch (res) {
+    case InternalResolution::Native:   resize_client(480, 320); break;
+    case InternalResolution::Res_720p:  resize_client(960, 640); break;
+    case InternalResolution::Res_1080p: resize_client(1200, 800); break;
+    case InternalResolution::Res_4K:    resize_client(1440, 960); break;
+  }
+
   if (hwnd_ != nullptr) {
-    InvalidateRect(static_cast<HWND>(hwnd_), nullptr, TRUE);
+    InvalidateRect(static_cast<HWND>(hwnd_), nullptr, FALSE);
   }
 }
 
@@ -638,7 +746,7 @@ void Window::set_video_filter(VideoFilter filter) {
   update_menu_checks();
 
   if (hwnd_ != nullptr) {
-    InvalidateRect(static_cast<HWND>(hwnd_), nullptr, TRUE);
+    InvalidateRect(static_cast<HWND>(hwnd_), nullptr, FALSE);
   }
 }
 
@@ -800,9 +908,10 @@ void Window::load_config(const ConfigFile& config) {
   const int filter = config.get_int("Display", "video_filter", 1);
   const int hud = config.get_int("Display", "show_hud", 1);
   const int sidebar = config.get_int("Display", "sidebar", 1);
-  const int input_display = config.get_int("Replay", "input_display", 1);
+  const int input_display = config.get_int("Replay", "input_display", 0);
   const int hd_text = config.get_int("Display", "hd_text", 0);
   const int cheats = config.get_int("Cheats", "enabled", 0);
+  const int vsync = config.get_int("Display", "vsync", 1);
 
   set_aspect_ratio(static_cast<AspectRatio>(std::clamp(aspect, 0, 5)));
   set_internal_resolution(static_cast<InternalResolution>(std::clamp(res, 0, 3)));
@@ -812,6 +921,7 @@ void Window::load_config(const ConfigFile& config) {
   set_input_display(input_display != 0);
   if (hd_text != 0) set_hd_text_enabled(true);
   set_cheats_enabled(cheats != 0);
+  set_vsync(vsync != 0);
 
   input_mapping_.load_from_config(config);
 }
@@ -822,6 +932,7 @@ void Window::save_config(ConfigFile& config) const {
   config.set_int("Display", "video_filter", static_cast<int>(video_filter_));
   config.set_int("Display", "show_hud", show_hud_ ? 1 : 0);
   config.set_int("Display", "sidebar", sidebar_enabled_ ? 1 : 0);
+  config.set_int("Display", "vsync", vsync_ ? 1 : 0);
   config.set_int("Display", "hd_text", hd_text_enabled_ ? 1 : 0);
   config.set_int("Cheats", "enabled", cheats_enabled_ ? 1 : 0);
   config.set_int("Replay", "input_display", input_display_ ? 1 : 0);
@@ -988,6 +1099,16 @@ bool Window::process_events(Hardware& hardware) {
   }
 
   input_frame_.clear();
+  RECT client_rect;
+  GetClientRect(static_cast<HWND>(hwnd_), &client_rect);
+  const int client_w = client_rect.right - client_rect.left;
+  const int client_h = client_rect.bottom - client_rect.top;
+  if (client_w > 0 && client_h > 0) {
+    const SidebarLayout layout =
+        calculate_sidebar_layout(client_w, client_h, sidebar_enabled_, aspect_ratio_);
+    cached_viewport_ = layout.game;
+  }
+
   win32_input_.set_window(hwnd_);
   win32_input_.set_mapping(&input_mapping_);
   win32_input_.set_viewport(cached_viewport_.x, cached_viewport_.y,
@@ -1167,59 +1288,107 @@ void Window::set_playback_indicator(int indicator) {
 }
 
 void Window::draw_sidebar_panel(void* hdc_ptr, const SidebarData& data, const SidebarLayout& layout) {
+  if (layout.sidebar.width <= 0 || layout.sidebar.height <= 0) return;
   auto* hdc = static_cast<HDC>(hdc_ptr);
 
-  // Panel background with an accent edge on the game side.
-  RECT panel{layout.sidebar.x, layout.sidebar.y,
-             layout.sidebar.x + layout.sidebar.width,
-             layout.sidebar.y + layout.sidebar.height};
-  HBRUSH bg = CreateSolidBrush(RGB(13, 17, 23));
-  FillRect(hdc, &panel, bg);
-  DeleteObject(bg);
-  RECT edge{layout.sidebar.x, layout.sidebar.y, layout.sidebar.x + 2,
-            layout.sidebar.y + layout.sidebar.height};
-  HBRUSH accent = CreateSolidBrush(RGB(74, 144, 226));
-  FillRect(hdc, &edge, accent);
-  DeleteObject(accent);
-
-  static HFONT body_font = nullptr;
-  static HFONT head_font = nullptr;
-  if (body_font == nullptr) {
-    body_font = CreateFontA(-15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                            FIXED_PITCH | FF_MODERN, "Consolas");
-    head_font = CreateFontA(-15, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
-                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                            FIXED_PITCH | FF_MODERN, "Consolas");
+  // Initialize/resize sidebar offscreen double buffer
+  if (sidebar_dc_ == nullptr) {
+    HDC screen_dc = GetDC(nullptr);
+    sidebar_dc_ = CreateCompatibleDC(screen_dc);
+    ReleaseDC(nullptr, screen_dc);
   }
+  if (sidebar_bm_ == nullptr || sidebar_w_ != layout.sidebar.width || sidebar_h_ != layout.sidebar.height) {
+    if (sidebar_bm_ != nullptr) {
+      SelectObject(static_cast<HDC>(sidebar_dc_), static_cast<HBITMAP>(sidebar_bm_old_));
+      DeleteObject(static_cast<HBITMAP>(sidebar_bm_));
+    }
+    HDC screen_dc = GetDC(nullptr);
+    sidebar_bm_ = CreateCompatibleBitmap(screen_dc, layout.sidebar.width, layout.sidebar.height);
+    ReleaseDC(nullptr, screen_dc);
+    sidebar_bm_old_ = SelectObject(static_cast<HDC>(sidebar_dc_), static_cast<HBITMAP>(sidebar_bm_));
+    sidebar_w_ = layout.sidebar.width;
+    sidebar_h_ = layout.sidebar.height;
+  }
+  HDC target_dc = static_cast<HDC>(sidebar_dc_);
+
+  // Panel background with an accent edge on the game side.
+  RECT panel{0, 0, layout.sidebar.width, layout.sidebar.height};
+  FillRect(target_dc, &panel, static_cast<HBRUSH>(sidebar_bg_brush_));
+
+  RECT edge{0, 0, 2, layout.sidebar.height};
+  FillRect(target_dc, &edge, static_cast<HBRUSH>(sidebar_accent_brush_));
 
   const auto lines = sidebar_panel_lines(data);
-  int y = layout.sidebar.y + 14;
-  const int x = layout.sidebar.x + 14;
+  int y = 14;
+  const int x = 14;
   const int line_h = 20;
   for (const auto& [text, is_heading] : lines) {
     if (is_heading) {
       y += 8;  // Section break before headings.
-      HBRUSH rule = CreateSolidBrush(RGB(45, 55, 70));
       RECT rule_rect{x, y + line_h - 4, x + layout.sidebar.width - 28, y + line_h - 3};
-      FillRect(hdc, &rule_rect, rule);
-      DeleteObject(rule);
+      FillRect(target_dc, &rule_rect, static_cast<HBRUSH>(sidebar_rule_brush_));
     }
     RECT text_rect{x, y, x + layout.sidebar.width - 14, y + line_h + 4};
-    SetTextColor(hdc, is_heading ? RGB(245, 166, 35) : RGB(220, 228, 238));
-    SetBkMode(hdc, TRANSPARENT);
-    SelectObject(hdc, is_heading ? head_font : body_font);
-    DrawTextA(hdc, text.c_str(), -1, &text_rect,
+    SetTextColor(target_dc, is_heading ? RGB(245, 166, 35) : RGB(220, 228, 238));
+    SetBkMode(target_dc, TRANSPARENT);
+    SelectObject(target_dc, is_heading ? static_cast<HFONT>(head_font_) : static_cast<HFONT>(body_font_));
+    DrawTextA(target_dc, text.c_str(), -1, &text_rect,
               DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOCLIP | DT_PATH_ELLIPSIS);
     y += line_h;
   }
+
+  // Blit the small sidebar directly into the window DC
+  BitBlt(hdc, layout.sidebar.x, layout.sidebar.y, layout.sidebar.width, layout.sidebar.height,
+         target_dc, 0, 0, SRCCOPY);
+}
+
+bool Window::ensure_back_buffer(int width, int height) {
+  if (width <= 0 || height <= 0) return false;
+  if (back_dc_ != nullptr && back_bm_ != nullptr && back_w_ == width && back_h_ == height) {
+    return true;
+  }
+
+  if (back_dc_ == nullptr) {
+    HDC screen_dc = GetDC(nullptr);
+    back_dc_ = CreateCompatibleDC(screen_dc);
+    ReleaseDC(nullptr, screen_dc);
+    if (back_dc_ == nullptr) return false;
+  }
+
+  if (back_bm_ != nullptr) {
+    SelectObject(static_cast<HDC>(back_dc_), static_cast<HBITMAP>(back_bm_old_));
+    DeleteObject(static_cast<HBITMAP>(back_bm_));
+    back_bm_ = nullptr;
+  }
+
+  // A DIB section (rather than a compatible bitmap) keeps StretchDIBits on
+  // its fast path when the source is a 32-bit top-down DIB.
+  BITMAPINFO bmi = {};
+  bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  bmi.bmiHeader.biWidth = width;
+  bmi.bmiHeader.biHeight = -height;  // Top-down.
+  bmi.bmiHeader.biPlanes = 1;
+  bmi.bmiHeader.biBitCount = 32;
+  bmi.bmiHeader.biCompression = BI_RGB;
+
+  void* bits = nullptr;
+  HBITMAP bm = CreateDIBSection(static_cast<HDC>(back_dc_), &bmi, DIB_RGB_COLORS,
+                                &bits, nullptr, 0);
+  if (bm == nullptr) return false;
+
+  back_bm_ = static_cast<void*>(bm);
+  back_bm_old_ = SelectObject(static_cast<HDC>(back_dc_), bm);
+  back_w_ = width;
+  back_h_ = height;
+  back_needs_clear_ = true;
+  return true;
 }
 
 void Window::render(const Ppu& ppu, const SidebarData& sidebar_data) {
   if (!is_open_ || hdc_ == nullptr) return;
 
   HWND hwnd = static_cast<HWND>(hwnd_);
-  HDC hdc = static_cast<HDC>(hdc_);
+  HDC window_dc = static_cast<HDC>(hdc_);
 
   RECT client_rect;
   GetClientRect(hwnd, &client_rect);
@@ -1238,65 +1407,35 @@ void Window::render(const Ppu& ppu, const SidebarData& sidebar_data) {
     last_aspect_ratio_ = aspect_ratio_;
     last_sidebar_enabled_ = layout.sidebar_shown;
     cached_viewport_ = layout.game;
-
-    // Clear entire window background to black to remove leftover frames.
-    HBRUSH black_brush = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-    FillRect(hdc, &client_rect, black_brush);
+    back_needs_clear_ = true;
   }
   if (cached_viewport_.width <= 0 || cached_viewport_.height <= 0) {
     cached_viewport_ = layout.game;
   }
 
-  const ViewportRect& vp = cached_viewport_;
+  // Compose into the offscreen buffer, then present in one blit. Falling back
+  // to the window DC keeps rendering alive if the buffer cannot be created.
+  const bool buffered = ensure_back_buffer(client_w, client_h);
+  HDC hdc = buffered ? static_cast<HDC>(back_dc_) : window_dc;
 
-  // Keep letterbox margins around the game rect solid black.
-  HBRUSH black_brush = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-  if (vp.x > 0) {
-    RECT left_rect = {0, 0, vp.x, client_h};
-    FillRect(hdc, &left_rect, black_brush);
-  }
-  if (vp.y > 0) {
-    RECT top_rect = {0, 0, vp.x + vp.width, vp.y};
-    FillRect(hdc, &top_rect, black_brush);
-  }
-  if (vp.x + vp.width < client_w && !layout.sidebar_shown) {
-    RECT right_rect = {vp.x + vp.width, 0, client_w, client_h};
-    FillRect(hdc, &right_rect, black_brush);
-  }
-  if (vp.y + vp.height < client_h) {
-    RECT bottom_rect = {0, vp.y + vp.height, vp.x + vp.width, client_h};
-    FillRect(hdc, &bottom_rect, black_brush);
+  // Only the letterbox bars need repainting, and only when the layout moved:
+  // the game rect and sidebar together cover everything else every frame.
+  if (back_needs_clear_) {
+    RECT full{0, 0, client_w, client_h};
+    FillRect(hdc, &full, static_cast<HBRUSH>(black_brush_));
+    back_needs_clear_ = false;
   }
 
-  // Use COLORONCOLOR for hardware-fast blitting at 1080p and 4K (eliminating slow GDI HALFTONE CPU lag)
   SetStretchBltMode(hdc, COLORONCOLOR);
 
   const std::uint32_t* render_data = ppu.framebuffer.data();
   int src_w = ppu.width;
   int src_h = ppu.height;
 
-  // Internal Resolution: integer nearest pre-scale. The k>1 path replaces
-  // the 2x filters (their input must stay 1x pixel art).
-  const int internal_k = [this]() {
-    switch (internal_resolution_) {
-      case InternalResolution::Res_720p:  return 4;   // 960x640
-      case InternalResolution::Res_1080p: return 6;   // 1440x960
-      case InternalResolution::Res_4K:    return 9;   // 2160x1440
-      default:                            return 1;
-    }
-  }();
-  if (internal_k > 1 && video_filter_ == VideoFilter::NearestNeighbor) {
-    scale2x_buffer_.resize((src_w * internal_k) * (src_h * internal_k));
-    apply_nearest_k(ppu.framebuffer.data(), scale2x_buffer_.data(), src_w, src_h, internal_k);
-    render_data = scale2x_buffer_.data();
-    src_w *= internal_k;
-    src_h *= internal_k;
-  }
-
   // HD text: upscale 2x, then let the pack overwrite matched glyph blocks
   // with 16x16 replacements. Works on top of any base filter.
   if (hd_text_enabled_ && hd_pack_.loaded()) {
-    scale2x_buffer_.resize((src_w * 2) * (src_h * 2));
+    scale2x_buffer_.resize(static_cast<std::size_t>(src_w * 2) * (src_h * 2));
     for (int y = 0; y < src_h * 2; ++y) {
       for (int x = 0; x < src_w * 2; ++x) {
         scale2x_buffer_[static_cast<std::size_t>(y) * (src_w * 2) + x] =
@@ -1308,14 +1447,14 @@ void Window::render(const Ppu& ppu, const SidebarData& sidebar_data) {
     render_data = scale2x_buffer_.data();
     src_w = src_w * 2;
     src_h = src_h * 2;
-  } else if (video_filter_ == VideoFilter::Scale2x && !scale2x_buffer_.empty()) {
-    scale2x_buffer_.resize((src_w * 2) * (src_h * 2));
+  } else if (video_filter_ == VideoFilter::Scale2x) {
+    scale2x_buffer_.resize(static_cast<std::size_t>(src_w * 2) * (src_h * 2));
     apply_scale2x(ppu.framebuffer.data(), scale2x_buffer_.data(), src_w, src_h);
     render_data = scale2x_buffer_.data();
     src_w = src_w * 2;
     src_h = src_h * 2;
-  } else if (video_filter_ == VideoFilter::Bilinear && !scale2x_buffer_.empty()) {
-    scale2x_buffer_.resize((src_w * 2) * (src_h * 2));
+  } else if (video_filter_ == VideoFilter::Bilinear) {
+    scale2x_buffer_.resize(static_cast<std::size_t>(src_w * 2) * (src_h * 2));
     apply_bilinear_2x(ppu.framebuffer.data(), scale2x_buffer_.data(), src_w, src_h);
     render_data = scale2x_buffer_.data();
     src_w = src_w * 2;
@@ -1329,6 +1468,8 @@ void Window::render(const Ppu& ppu, const SidebarData& sidebar_data) {
   bmi.bmiHeader.biPlanes = 1;
   bmi.bmiHeader.biBitCount = 32;
   bmi.bmiHeader.biCompression = BI_RGB;
+
+  const ViewportRect& vp = cached_viewport_;
 
   StretchDIBits(
       hdc,
@@ -1348,6 +1489,46 @@ void Window::render(const Ppu& ppu, const SidebarData& sidebar_data) {
   if (layout.sidebar_shown) {
     draw_sidebar_panel(hdc, sidebar_data, layout);
   }
+
+  if (buffered) {
+    // One atomic present of the finished frame.
+    BitBlt(window_dc, 0, 0, client_w, client_h, hdc, 0, 0, SRCCOPY);
+  }
+
+}
+
+double Window::display_refresh_hz() const {
+  if (hwnd_ == nullptr) return 0.0;
+
+  MONITORINFOEXA info = {};
+  info.cbSize = sizeof(MONITORINFOEXA);
+  HMONITOR mon = MonitorFromWindow(static_cast<HWND>(hwnd_), MONITOR_DEFAULTTONEAREST);
+  if (mon == nullptr || !GetMonitorInfoA(mon, &info)) return 0.0;
+
+  DEVMODEA dm = {};
+  dm.dmSize = sizeof(DEVMODEA);
+  if (!EnumDisplaySettingsA(info.szDevice, ENUM_CURRENT_SETTINGS, &dm)) return 0.0;
+  if (dm.dmDisplayFrequency <= 1) return 0.0;
+
+  // Windows reports whole Hz, so the common 59.94 modes come back as 60.
+  return static_cast<double>(dm.dmDisplayFrequency);
+}
+
+bool Window::present_wait() {
+  if (!is_open_ || !vsync_) return false;
+  // Hand the finished frame to the compositor and wait until it has been
+  // picked up. Without this the loop free-runs against the refresh, so frames
+  // land at a drifting phase and the cadence visibly stutters even though no
+  // frame is ever late.
+  GdiFlush();
+  const auto before = std::chrono::steady_clock::now();
+  const bool ok = SUCCEEDED(DwmFlush());
+  const double waited_ms =
+      std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - before).count();
+  // A flush that returns immediately did not pace anything (compositor off,
+  // window minimised); the caller must fall back to its own clock.
+  return ok && waited_ms > 2.0;
 }
 
 #else
@@ -1383,6 +1564,9 @@ Window::~Window() {}
 
 bool Window::process_events(Hardware& /*hardware*/) { return false; }
 void Window::render(const Ppu& /*ppu*/, const SidebarData& /*sidebar*/) {}
+bool Window::ensure_back_buffer(int /*width*/, int /*height*/) { return false; }
+bool Window::present_wait() { return false; }
+double Window::display_refresh_hz() const { return 0.0; }
 void Window::set_aspect_ratio(AspectRatio ratio) { aspect_ratio_ = ratio; }
 void Window::set_internal_resolution(InternalResolution res) { internal_resolution_ = res; }
 void Window::set_video_filter(VideoFilter filter) { video_filter_ = filter; }

@@ -109,7 +109,10 @@ static int bind_host(void) {
     return 1;
 }
 
-// Find the recompiled game DLL for a ROM path.
+// Find the recompiled game DLL for a ROM path. Searched in order:
+//   $AW_RECOMP_LIB (full path), cwd-relative ../gba-recomp/out and out/,
+//   then exe-relative walks (so double-clicking and any working
+//   directory still find the sibling gba-recomp checkout).
 static int find_game_dll(const char* rom_path, char* out, size_t out_size) {
     const char* env = getenv("AW_RECOMP_LIB");
     if (env != NULL && env[0] != '\0') {
@@ -127,12 +130,33 @@ static int find_game_dll(const char* rom_path, char* out, size_t out_size) {
     char* dot = strrchr(stem, '.');
     if (dot != NULL) *dot = '\0';
 
-    const char* dirs[] = {"../gba-recomp/out", "out"};
-    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i) {
-        snprintf(out, out_size, "%s/%s.dll", dirs[i], stem);
-        FILE* f = fopen(out, "rb");
+    char candidates[8][600];
+    int n = 0;
+#ifdef _WIN32
+    char exe_path[MAX_PATH];
+    DWORD len = GetModuleFileNameA(NULL, exe_path, sizeof(exe_path));
+    if (len > 0 && len < sizeof(exe_path)) {
+        char* exe_dir_end = strrchr(exe_path, '\\');
+        if (exe_dir_end != NULL) {
+            *exe_dir_end = '\0';
+            char exe_dir[MAX_PATH];
+            snprintf(exe_dir, sizeof(exe_dir), "%s", exe_path);
+            // build/<backend>/runtime -> repo root -> sibling checkout
+            // (four levels: runtime, backend, build, repo root).
+            snprintf(candidates[n++], sizeof(candidates[n]), "%s/../../../../gba-recomp/out/%s.dll", exe_dir, stem);
+            snprintf(candidates[n++], sizeof(candidates[n]), "%s/out/%s.dll", exe_dir, stem);
+            snprintf(candidates[n++], sizeof(candidates[n]), "%s/../gba-recomp/out/%s.dll", exe_dir, stem);
+        }
+    }
+#endif
+    snprintf(candidates[n++], sizeof(candidates[n]), "../gba-recomp/out/%s.dll", stem);
+    snprintf(candidates[n++], sizeof(candidates[n]), "out/%s.dll", stem);
+
+    for (int i = 0; i < n; ++i) {
+        FILE* f = fopen(candidates[i], "rb");
         if (f != NULL) {
             fclose(f);
+            snprintf(out, out_size, "%s", candidates[i]);
             return 1;
         }
     }

@@ -64,6 +64,7 @@ void NavController::reset() {
   prev_step_tile_x_ = 0;
   prev_step_tile_y_ = 0;
   has_prev_step_tile_ = false;
+  in_map_ = false;
 }
 
 void NavController::load_symbols(const std::string& rom_sha1) {
@@ -143,10 +144,18 @@ std::uint16_t NavController::update(const InputFrame& frame) {
     prev_context_ = context_;
   }
 
-  // Exact tile-coordinate reading, tried before anything else: when this
-  // ROM's symbol table has mined cursor addresses (data/symbols/README.md's
-  // [Cursor] section), it needs no sprite identification, no pixel error and
-  // cannot desync, so it wins over the OAM guess whenever it succeeds.
+  // Only steer and process mouse/touch pointer navigation during gameplay on the map.
+  // In menus, name entry, title, and cutscenes, pointer navigation is disabled so the
+  // player uses the standard D-pad / keyboard / joystick controls.
+  const bool on_map = in_map_ || context_ == ContextId::MapView;
+  if (!on_map) {
+    tracker_.reset();
+    nav_.reset();
+    pointer_armed_ = false;
+    last_emitted_dpad_ = 0;
+    return 0;
+  }
+
   const CursorTile cursor_tile = read_cursor_tile(*backend_, context_probe_.table().cursor);
   const bool exact_mode = cursor_tile.found;
 
@@ -251,13 +260,33 @@ std::uint16_t NavController::update(const InputFrame& frame) {
     in.scroll_y = debug_frame.scroll_y;
   }
 
-  const NavOutput out = nav_.step(in);
+  NavOutput out = nav_.step(in);
 
-  // Hidden-frame burst initialization.  In exact mode, when the pointer is armed
-  // and steering, we know both the cursor's current tile and the target tile
-  // exactly.  If they differ by more than 1 tile step, we prepare a burst
-  // for the caller (main.cpp) to run hidden emulator frames until the cursor
-  // reaches the target.
+  if (const PointerState* p = frame.primary_pointer()) {
+    if (p->in_viewport) {
+      if (p->secondary_edge) {
+        out.keys |= kKeyB;
+      }
+
+      // Middle-click drag, Right-drag, or Touch-drag Camera Panning
+      if (p->middle_down || (p->kind == PointerKind::Touch && p->primary_down)) {
+        if (p->drag_dx < -1) out.keys |= kKeyRight;
+        else if (p->drag_dx > 1) out.keys |= kKeyLeft;
+        if (p->drag_dy < -1) out.keys |= kKeyDown;
+        else if (p->drag_dy > 1) out.keys |= kKeyUp;
+      }
+
+      // RTS Edge Scrolling (when mouse is at screen border)
+      if (!p->primary_down && !p->middle_down && on_map) {
+        if (p->gba_x <= 1) out.keys |= kKeyLeft;
+        else if (p->gba_x >= 238) out.keys |= kKeyRight;
+        if (p->gba_y <= 1) out.keys |= kKeyUp;
+        else if (p->gba_y >= 158) out.keys |= kKeyDown;
+      }
+    }
+  }
+
+  // Hidden-frame burst initialization for smooth steering fallback
   burst_remaining_ = 0;
   has_prev_step_tile_ = false;
 
@@ -268,8 +297,6 @@ std::uint16_t NavController::update(const InputFrame& frame) {
     if (total_steps > 1) {
       burst_target_x_ = debug_frame.target_tile_x;
       burst_target_y_ = debug_frame.target_tile_y;
-      // Frame 0 (this frame) already emitted step 1's press key via nav_.step(in).
-      // So the burst starts on step 1's release phase (phase 1).
       burst_phase_ = 1;
       burst_remaining_ = std::min((total_steps - 1) * kBurstFramesPerStep + (kBurstFramesPerStep - 1), kMaxBurstFrames);
       prev_step_tile_x_ = cursor_tile.x;

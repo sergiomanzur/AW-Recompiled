@@ -16,11 +16,13 @@ baserom*.gba
 # Build output
 build/
 out/
+scratch/
 
 # OS/editor noise
 .DS_Store
 Thumbs.db
 *.swp
+*.lnk
 
 # Temporary diagnostic logs and test screenshots
 *.log
@@ -32,7 +34,6 @@ Thumbs.db
 # Savestates captured via the F5 hotkey or produced/consumed by the offline
 # cursor miner. Contain ROM-derived data and must never be committed.
 *.ss
-
 
 # Replay recordings (inputs only, safe to share, but runtime artifacts)
 *.awr

@@ -56,6 +56,9 @@ public:
   bool bursting() const { return burst_remaining_ > 0; }
   std::uint16_t burst_step();
 
+  void set_in_map(bool in_map) { in_map_ = in_map; }
+  bool in_map() const { return in_map_; }
+
   ContextId context() const { return context_; }
 
   // The mined cursor addresses loaded by load_symbols() (invalid pair when
@@ -100,6 +103,7 @@ private:
   Indicator indicator_{};
   std::uint16_t last_emitted_dpad_ = 0;
   bool symbols_loaded_ = false;
+  bool in_map_ = false;
 
   // Latches true while the pointer is arming steering: set on a frame where
   // the primary pointer is in-viewport and moved, held true across

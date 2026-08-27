@@ -17,5 +17,8 @@ set(BUILD_GLES3 OFF CACHE BOOL "" FORCE)
 
 enable_testing()
 
-add_subdirectory(third-party/mgba)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/mgba/CMakeLists.txt")
+  add_subdirectory(third-party/mgba)
+endif()
 add_subdirectory(runtime)
+

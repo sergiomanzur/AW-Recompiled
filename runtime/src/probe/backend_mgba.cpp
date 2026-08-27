@@ -79,4 +79,14 @@ std::uint16_t MgbaProbeBackend::read_io16(std::uint32_t addr) {
   return aw_mgba_read16(static_cast<struct mCore*>(core_), addr);
 }
 
+void MgbaProbeBackend::write8(std::uint32_t addr, std::uint8_t val) {
+  if (core_ == nullptr) return;
+  aw_mgba_write8(static_cast<struct mCore*>(core_), addr, val);
+}
+
+void MgbaProbeBackend::write16(std::uint32_t addr, std::uint16_t val) {
+  if (core_ == nullptr) return;
+  aw_mgba_write16(static_cast<struct mCore*>(core_), addr, val);
+}
+
 }  // namespace aw

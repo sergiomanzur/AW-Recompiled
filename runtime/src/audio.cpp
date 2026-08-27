@@ -181,9 +181,7 @@ int Audio::queued_frames() const {
 void Audio::push_samples(const std::int16_t* samples, int count) {
   if (!is_active_ || samples == nullptr || count <= 0) return;
 
-  // If the ring buffer is (nearly) full, drop the oldest samples so the head
-  // never overtakes the tail. Overwriting un-read data corrupts playback
-  // (crackle/garbage); dropping stale audio is the lesser evil.
+  constexpr std::size_t kRingMask = kRingSize - 1;
   const std::size_t incoming = static_cast<std::size_t>(count) * 2;
   std::size_t used = (ring_head_ >= ring_tail_)
       ? (ring_head_ - ring_tail_)
@@ -192,15 +190,16 @@ void Audio::push_samples(const std::int16_t* samples, int count) {
     std::size_t to_drop = used + incoming - kRingSize;
     // Keep the ring an even number of int16s (whole stereo frames).
     if (to_drop & 1) ++to_drop;
-    ring_tail_ = (ring_tail_ + to_drop) % kRingSize;
+    ring_tail_ = (ring_tail_ + to_drop) & kRingMask;
   }
 
   // Append incoming stereo sample frames to the ring buffer
-  for (int i = 0; i < count; ++i) {
-    ring_buffer_[ring_head_]     = samples[i * 2];
-    ring_buffer_[ring_head_ + 1] = samples[i * 2 + 1];
-    ring_head_ = (ring_head_ + 2) % kRingSize;
+  const std::size_t first_chunk = (std::min)(incoming, kRingSize - ring_head_);
+  std::memcpy(&ring_buffer_[ring_head_], samples, first_chunk * sizeof(std::int16_t));
+  if (incoming > first_chunk) {
+    std::memcpy(&ring_buffer_[0], samples + first_chunk, (incoming - first_chunk) * sizeof(std::int16_t));
   }
+  ring_head_ = (ring_head_ + incoming) & kRingMask;
 
   pump_waveout();
 }
@@ -209,16 +208,13 @@ void Audio::pump_waveout() {
   if (!is_active_ || hwaveout_ == nullptr) return;
 
   auto hwave = static_cast<HWAVEOUT>(hwaveout_);
+  constexpr std::size_t kRingMask = kRingSize - 1;
 
   // Determine available sample frames in ring buffer
   std::size_t avail_frames = ring_queued_frames();
 
   // Feed available blocks into waveOut driver
   while (avail_frames >= static_cast<std::size_t>(kBlockSamples)) {
-    // Find a free waveOut buffer. A buffer is reusable once it has finished
-    // playing (WHDR_DONE), even if the driver has not yet cleared
-    // WHDR_INQUEUE — relying on INQUEUE alone stalls recycling on Windows and
-    // kills audio after the first 16 blocks.
     int target = -1;
     for (int i = 0; i < kNumBuffers; ++i) {
       auto* test_hdr = static_cast<WAVEHDR*>(wave_headers_[(current_buffer_ + i) % kNumBuffers]);
@@ -235,26 +231,37 @@ void Audio::pump_waveout() {
     }
 
     auto* hdr = static_cast<WAVEHDR*>(wave_headers_[target]);
-    if (hdr->dwFlags & WHDR_PREPARED) {
-      waveOutUnprepareHeader(hwave, hdr, sizeof(WAVEHDR));
-    }
 
-    // Copy kBlockSamples from ring_buffer_ into wave_buffers_[target]
-    for (int s = 0; s < kBlockSamples; ++s) {
-      wave_buffers_[target][s * 2]     = ring_buffer_[ring_tail_];
-      wave_buffers_[target][s * 2 + 1] = ring_buffer_[ring_tail_ + 1];
-      ring_tail_ = (ring_tail_ + 2) % kRingSize;
+    // Fast block copy from ring buffer into wave buffer
+    const std::size_t copy_samples = static_cast<std::size_t>(kBlockSamples) * 2;
+    const std::size_t first_chunk = (std::min)(copy_samples, kRingSize - ring_tail_);
+    std::memcpy(wave_buffers_[target].data(), &ring_buffer_[ring_tail_], first_chunk * sizeof(std::int16_t));
+    if (copy_samples > first_chunk) {
+      std::memcpy(wave_buffers_[target].data() + first_chunk, &ring_buffer_[0], (copy_samples - first_chunk) * sizeof(std::int16_t));
     }
+    ring_tail_ = (ring_tail_ + copy_samples) & kRingMask;
     avail_frames -= kBlockSamples;
 
+    // Prepare each header exactly once. waveOutPrepareHeader page-locks the
+    // buffer through a kernel transition; doing that (plus an unprepare) for
+    // every block, ~64 times a second, showed up as multi-millisecond audio
+    // stalls. The buffer address and length never change, so the preparation
+    // stays valid for the life of the device.
     const DWORD byte_count = static_cast<DWORD>(kBlockSamples) * 2 * sizeof(std::int16_t);
-    hdr->lpData = reinterpret_cast<LPSTR>(wave_buffers_[target].data());
-    hdr->dwBufferLength = byte_count;
-    hdr->dwFlags = 0;
-
-    if (waveOutPrepareHeader(hwave, hdr, sizeof(WAVEHDR)) == MMSYSERR_NOERROR) {
-      waveOutWrite(hwave, hdr, sizeof(WAVEHDR));
+    if (!(hdr->dwFlags & WHDR_PREPARED)) {
+      hdr->lpData = reinterpret_cast<LPSTR>(wave_buffers_[target].data());
+      hdr->dwBufferLength = byte_count;
+      hdr->dwFlags = 0;
+      if (waveOutPrepareHeader(hwave, hdr, sizeof(WAVEHDR)) != MMSYSERR_NOERROR) {
+        break;
+      }
     }
+
+    // Requeue the prepared header: clear the driver's completion flag but keep
+    // WHDR_PREPARED, which waveOutWrite requires.
+    hdr->dwBufferLength = byte_count;
+    hdr->dwFlags &= ~WHDR_DONE;
+    waveOutWrite(hwave, hdr, sizeof(WAVEHDR));
 
     current_buffer_ = (target + 1) % kNumBuffers;
   }
